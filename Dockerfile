@@ -15,7 +15,7 @@ WORKDIR /app
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
+    curl git \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy Go binary
@@ -23,6 +23,7 @@ COPY --from=builder /app/bot /usr/local/bin/go-bot
 
 # Copy Python requirements and install
 COPY python/requirements.txt .
+RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy Python Code
