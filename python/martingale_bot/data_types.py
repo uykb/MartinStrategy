@@ -47,8 +47,6 @@ class OrderData:
     filled_quantity: float
     status: OrderStatus
     timestamp: float = field(default_factory=time.time)
-    
-    # 辅助标记，用于策略识别订单用途
     tag: str = ""  # e.g., "BASE", "SAFETY_1", "TP"
 
 @dataclass
@@ -61,7 +59,7 @@ class PositionData:
 
 @dataclass
 class StrategyConfig:
-    symbol: str = "BTC/USDT"
+    symbol: str = "HYPEUSDT"
     base_order_size: float = 100.0       # 首单金额 (USDT)
     safety_order_size: float = 100.0     # 首个加仓单金额 (USDT)
     max_safety_orders: int = 9           # 最大加仓次数 (default 9 to match image)

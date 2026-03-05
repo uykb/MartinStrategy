@@ -16,8 +16,6 @@ class TechnicalAnalysis:
             return 0.0
             
         # 转换为 DataFrame
-        # Binance kline 格式:
-        # 0: Open time, 1: Open, 2: High, 3: Low, 4: Close, 5: Volume ...
         df = pd.DataFrame(klines, columns=[
             'timestamp', 'open', 'high', 'low', 'close', 'volume', 
             'close_time', 'quote_asset_volume', 'trades', 'buy_base_vol', 'buy_quote_vol', 'ignore'
@@ -29,7 +27,6 @@ class TechnicalAnalysis:
         df['close'] = df['close'].astype(float)
         
         # 计算 ATR
-        # 使用 pandas_ta
         try:
             atr_series = df.ta.atr(length=period)
             if atr_series is not None and not atr_series.empty:

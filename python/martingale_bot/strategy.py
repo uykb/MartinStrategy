@@ -1,8 +1,8 @@
-import asyncio
 from typing import Dict, List, Optional
 from .data_types import *
 from .event_engine import EventEngine, Event
 from .indicators import TechnicalAnalysis
+import asyncio
 
 class MartingaleStrategy:
     """
@@ -11,7 +11,7 @@ class MartingaleStrategy:
     def __init__(self, engine: EventEngine, config: StrategyConfig, exchange_api):
         self.engine = engine
         self.config = config
-        self.exchange = exchange_api # BinanceClient (or Mock)
+        self.exchange = exchange_api # GoExchangeAdapter
         
         # 内部状态
         self.is_active = False
@@ -107,7 +107,8 @@ class MartingaleStrategy:
         print(f"Placing BASE order for {self.config.base_order_size} USDT")
         
         # 获取当前价格估算数量 (真实下单时如果是市价单，Binance U本位合约通常按 quantity 下单，所以需要先算好)
-        current_price = await self.exchange.get_symbol_price(self.config.symbol)
+        # current_price = await self.exchange.get_symbol_price(self.config.symbol)
+        current_price = 0 # TODO: fetch from Go or Tick
         if current_price <= 0:
             print("Error: Could not get current price.")
             return
@@ -117,12 +118,6 @@ class MartingaleStrategy:
         
         # 发送订单
         # order = await self.exchange.create_order(self.config.symbol, OrderSide.BUY, OrderType.MARKET, qty)
-        # if order:
-        #    print(f"Base Order Placed: {order.order_id}")
-        
-        # 模拟成交 (Mock)
-        # 在真实环境中，这里不需要做任何事，等待 websocket 推送 ORDER_FILLED 事件
-        # Mock 模式下，我们在 main.py 里手动触发
         pass
 
     async def place_grid_orders(self, base_price: float):
@@ -140,7 +135,6 @@ class MartingaleStrategy:
         
         if grid_atr <= 0:
             print("CRITICAL WARNING: ATR is 0. Grid layout may be incorrect!")
-            # 可以在这里做一个 fallback，比如 price * 1%
             
         print(f"Using ATR for Grid: {grid_atr}")
         
@@ -253,18 +247,8 @@ class MartingaleStrategy:
         print(f"Updating TP Order: Price {tp_price:.2f}, Qty {tp_qty}")
         
         # 3. 执行撤单与挂单
-        # 在真实环境中，建议使用 API 的 "Cancel Replace" (如果支持) 或者先 Cancel 再 Place
-        # 这里模拟先撤后挂
-        
         # await self.exchange.cancel_order(symbol=self.config.symbol, order_id="TP_ORDER_ID") # 需维护 TP ID
-        # await self.exchange.create_order(
-        #     symbol=self.config.symbol, 
-        #     side=OrderSide.SELL, # 平多
-        #     type=OrderType.LIMIT, 
-        #     price=tp_price, 
-        #     quantity=tp_qty,
-        #     tag="TP"
-        # )
+        # await self.exchange.create_order(...)
         pass
 
     async def on_order_update(self, event: Event):
@@ -281,6 +265,7 @@ class MartingaleStrategy:
         # 如果是加仓单成交 -> 更新止盈
         elif "SAFETY" in order.tag and order.status == OrderStatus.FILLED:
             print("Safety order filled! Recalculating TP...")
+            # 注意：这里需要确保 position 数据已经更新，或者手动累加 position
             await self.update_tp_order()
             
         # 如果是止盈单成交 -> 结束本轮，准备下一轮

@@ -46,7 +46,6 @@ class EventEngine:
                 event = await self._queue.get()
                 if event.type in self._handlers:
                     for handler in self._handlers[event.type]:
-                        # 如果handler是异步的，await它；否则直接调用
                         if asyncio.iscoroutinefunction(handler):
                             await handler(event)
                         else:
