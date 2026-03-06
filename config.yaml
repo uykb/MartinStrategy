@@ -1,0 +1,24 @@
+exchange:
+  api_key: ""
+  api_secret: ""
+  symbol: "HYPEUSDT"
+  use_testnet: false
+
+strategy:
+  base_order_size: 100.0
+  safety_order_size: 100.0
+  max_safety_orders: 5
+  volume_scale: 1.5
+  step_scale: 1.2
+  target_profit: 0.01
+  atr_period: 14
+  atr_multiplier: 1.0
+
+storage:
+  sqlite_path: "bot.db"
+  redis_addr: "localhost:6379"
+  redis_pass: ""
+  redis_db: 0
+
+log:
+  level: "info"

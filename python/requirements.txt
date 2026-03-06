@@ -1,5 +1,0 @@
-requests
-aiohttp
-numpy
-pandas
-pandas-ta
