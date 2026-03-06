@@ -114,7 +114,7 @@ func (s *MartingaleStrategy) handleOrderUpdate(ctx context.Context, event core.E
 	}
 
 	utils.Logger.Info("Order Update Received", 
-		zap.Int64("id", order.Id), 
+		zap.Int64("id", order.ID), 
 		zap.String("status", string(order.Status)),
 		zap.String("type", string(order.Type)),
 	)
