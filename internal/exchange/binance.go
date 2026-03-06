@@ -46,7 +46,7 @@ func NewBinanceClient(cfg *config.ExchangeConfig, bus *core.EventBus) *BinanceCl
 // StartWS connects to the websocket stream
 func (bc *BinanceClient) StartWS() error {
 	// Sync Server Time first
-	if err := bc.client.NewSetServerTimeService().Do(context.Background()); err != nil {
+	if _, err := bc.client.NewSetServerTimeService().Do(context.Background()); err != nil {
 		utils.Logger.Error("Failed to sync server time", zap.Error(err))
 		// We continue anyway, hoping it's a transient network issue
 	}
