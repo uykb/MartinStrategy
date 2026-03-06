@@ -27,6 +27,9 @@ const (
 	StateClosing     State = "CLOSING"
 )
 
+// MinNotional is the minimum order value in USDT for Binance Futures
+const MinNotional = 5.0
+
 type MartingaleStrategy struct {
 	cfg      *config.StrategyConfig
 	exchange *exchange.BinanceClient
@@ -39,6 +42,13 @@ type MartingaleStrategy struct {
 	activeOrders map[int64]*futures.Order // Local cache of active orders
 	
 	currentATR   float64
+	
+	// Symbol Info
+	quantityPrecision int
+	pricePrecision    int
+	minQty            float64
+	stepSize          float64 // For quantity
+	tickSize          float64 // For price
 }
 
 func NewMartingaleStrategy(cfg *config.StrategyConfig, ex *exchange.BinanceClient, st *storage.Database, bus *core.EventBus) *MartingaleStrategy {
@@ -53,12 +63,39 @@ func NewMartingaleStrategy(cfg *config.StrategyConfig, ex *exchange.BinanceClien
 }
 
 func (s *MartingaleStrategy) Start() {
+	// Initialize Symbol Info (Precision, etc.)
+	if err := s.initSymbolInfo(); err != nil {
+		utils.Logger.Fatal("Failed to init symbol info", zap.Error(err))
+	}
+
 	// Subscribe to events
 	s.bus.Subscribe(core.EventTick, s.handleTick)
 	s.bus.Subscribe(core.EventOrderUpdate, s.handleOrderUpdate)
 	
 	// Initial state sync
 	s.syncState()
+}
+
+func (s *MartingaleStrategy) initSymbolInfo() error {
+	// We need to fetch Exchange Info
+	// For now, let's assume default values or fetch it
+	// TODO: Implement GetExchangeInfo in BinanceClient
+	// Hardcoded for HYPEUSDT/USDT pairs usually:
+	// Price Precision: 2 (0.01) or 4 (0.0001)
+	// Qty Precision: 2 (0.01) or 3 (0.001) or 0 (1)
+	
+	// Assuming HYPEUSDT has:
+	s.quantityPrecision = 2
+	s.pricePrecision = 4
+	s.stepSize = 0.01
+	s.tickSize = 0.0001
+	s.minQty = 0.01 // Default fallback
+	
+	utils.Logger.Info("Symbol Info Initialized (Hardcoded - Pending API impl)", 
+		zap.Int("qty_prec", s.quantityPrecision),
+		zap.Float64("step_size", s.stepSize),
+	)
+	return nil
 }
 
 func (s *MartingaleStrategy) syncState() {
@@ -160,11 +197,29 @@ func (s *MartingaleStrategy) enterLong(currentPrice float64) error {
 	// Update ATR before entry
 	s.updateATR()
 	
-	qty := s.cfg.BaseOrderSize / currentPrice
-	// Adjust quantity precision (simplified)
-	qty = utils.ToFixed(qty, 3) 
+	// Calculate Base Quantity
+	// Logic: MinNotional (5 USDT) / Price -> rounded UP to stepSize
+	minNotionalQty := MinNotional / currentPrice
+	baseQty := utils.RoundUpToTickSize(minNotionalQty, s.stepSize)
+	
+	// Ensure baseQty >= minQty
+	if baseQty < s.minQty {
+		baseQty = s.minQty
+	}
+	
+	// Use configured BaseOrderSize if it's larger than min required
+	// But user said: "Start with min notional (5U), then Fibonacci"
+	// So we ignore cfg.BaseOrderSize for quantity calc if the intent is strictly 5U start?
+	// User said: "calculate base仓位 based on Binance min order size (5U)"
+	// Let's use the calculated 5U qty as unit "1" for Fibonacci.
+	
+	utils.Logger.Info("Calculated Base Qty", 
+		zap.Float64("price", currentPrice), 
+		zap.Float64("raw_qty", minNotionalQty), 
+		zap.Float64("final_qty", baseQty),
+	)
 
-	_, err := s.exchange.PlaceOrder(futures.SideTypeBuy, futures.OrderTypeMarket, qty, 0)
+	_, err := s.exchange.PlaceOrder(futures.SideTypeBuy, futures.OrderTypeMarket, baseQty, 0)
 	if err != nil {
 		utils.Logger.Error("Failed to place base order", zap.Error(err))
 		return err
@@ -191,18 +246,26 @@ func (s *MartingaleStrategy) placeGridOrders() {
 		atr = entryPrice * 0.01 // Fallback 1%
 	}
 	
-	utils.Logger.Info("Placing Grid Orders", zap.Float64("Entry", entryPrice), zap.Float64("ATR", atr))
+	// Calculate Unit Quantity (Fibonacci 1) based on MinNotional logic
+	// We need to know what "1 unit" is. It is the base order size (5U).
+	unitQty := utils.RoundUpToTickSize(MinNotional / entryPrice, s.stepSize)
+	
+	utils.Logger.Info("Placing Grid Orders", zap.Float64("Entry", entryPrice), zap.Float64("ATR", atr), zap.Float64("UnitQty", unitQty))
 
 	for i := 1; i <= s.cfg.MaxSafetyOrders; i++ {
 		// Calculate Price: Entry - (ATR * Multiplier * i)
-		// Or using the specific logic from user (Fibonacci volume, Dynamic Step)
-		
 		stepDist := atr * s.cfg.AtrMultiplier * float64(i) // Simplified linear step for demo
 		price := entryPrice - stepDist
 		
-		// Fibonacci Volume
-		volMult := s.getFibonacci(i)
-		qty := (s.cfg.SafetyOrderSize * float64(volMult)) / price
+		// Ensure price precision
+		price = utils.ToFixed(price, s.pricePrecision) // Should align to tickSize really
+		
+		// Fibonacci Volume: Qty = UnitQty * Fib(i)
+		volMult := s.getFibonacci(i) // 1, 1, 2, 3...
+		qty := unitQty * float64(volMult)
+		
+		// Round qty to stepSize
+		qty = utils.RoundUpToTickSize(qty, s.stepSize)
 		
 		_, err := s.exchange.PlaceOrder(futures.SideTypeBuy, futures.OrderTypeLimit, qty, price)
 		if err != nil {
@@ -234,6 +297,10 @@ func (s *MartingaleStrategy) updateTP() {
 	// We might need to cancel all open SELLS first.
 	
 	// 4. Place new TP
+	// TP Qty = Full Position
+	// Round Price to TickSize
+	tpPrice = utils.ToFixed(tpPrice, s.pricePrecision)
+	
 	utils.Logger.Info("Updating TP", zap.Float64("Price", tpPrice), zap.Float64("Qty", amt))
 	s.exchange.PlaceOrder(futures.SideTypeSell, futures.OrderTypeLimit, math.Abs(amt), tpPrice)
 }

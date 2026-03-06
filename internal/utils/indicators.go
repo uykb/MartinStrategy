@@ -28,3 +28,14 @@ func ToFixed(num float64, precision int) float64 {
 	output := math.Pow(10, float64(precision))
 	return float64(int(num*output)) / output
 }
+
+// RoundUpToTickSize rounds up a number to the nearest multiple of tickSize
+// Example: num=0.1666, tickSize=0.01 -> 0.17
+func RoundUpToTickSize(num float64, tickSize float64) float64 {
+	if tickSize == 0 {
+		return num
+	}
+	// Use Decimal for precision if needed, but for now simple float math with epsilon
+	// ceil(num / tickSize) * tickSize
+	return math.Ceil(num/tickSize) * tickSize
+}
