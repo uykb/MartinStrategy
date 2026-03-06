@@ -66,9 +66,6 @@ func main() {
 	utils.Logger.Info("Shutting down...")
 	
 	// Graceful shutdown logic (e.g. CancelAllOrders if needed)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	
 	if err := ex.CancelAllOrders(); err != nil {
 		utils.Logger.Error("Failed to cancel orders on shutdown", zap.Error(err))
 	} else {
