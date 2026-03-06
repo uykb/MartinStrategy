@@ -149,6 +149,14 @@ func (bc *BinanceClient) CancelAllOrders() error {
 		Do(context.Background())
 }
 
+func (bc *BinanceClient) CancelOrder(orderID int64) error {
+	_, err := bc.client.NewCancelOrderService().
+		Symbol(bc.cfg.Symbol).
+		OrderID(orderID).
+		Do(context.Background())
+	return err
+}
+
 func (bc *BinanceClient) GetKlines(limit int) ([]*futures.Kline, error) {
 	return bc.client.NewKlinesService().
 		Symbol(bc.cfg.Symbol).

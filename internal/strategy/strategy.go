@@ -40,6 +40,7 @@ type MartingaleStrategy struct {
 	currentState State
 	position     *futures.AccountPosition
 	activeOrders map[int64]*futures.Order // Local cache of active orders
+	currentTPOrderID int64
 	
 	currentATR   float64
 	
@@ -166,33 +167,43 @@ func (s *MartingaleStrategy) handleOrderUpdate(ctx context.Context, event core.E
 		zap.String("type", string(order.Type)),
 	)
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if order.Status == futures.OrderStatusTypeFilled {
 		if order.Type == futures.OrderTypeMarket { // Base order filled
+			s.mu.Lock()
 			s.currentState = StateInPosition
+			s.mu.Unlock()
 			// Calculate ATR and Place Grid
 			go s.placeGridOrders()
 		} else if order.Type == futures.OrderTypeLimit {
 			// Could be Safety Order or Take Profit
-			// If Safety Order filled -> Update TP
-			// If TP filled -> Reset to Idle
 			
-			// We need a way to distinguish. 
-			// In a real system, we'd track Order Client ID.
-			// Here we assume: if price > entry, it's TP (for Long). If price < entry, it's Safety.
-			// Or check if it reduces position (TP) or increases (Safety).
+			// Check if it's our TP order
+			s.mu.RLock()
+			isTP := false
+			if s.currentTPOrderID != 0 && order.ID == s.currentTPOrderID {
+				isTP = true
+			} else if order.Side == futures.SideTypeSell {
+				// Fallback: If we lost state or it's a sell limit, assume TP for Long strategy
+				isTP = true
+			}
+			s.mu.RUnlock()
 			
-			if order.Side == futures.SideTypeSell { // TP Filled (assuming Long strategy)
+			if isTP { // TP Filled
 				utils.Logger.Info("Take Profit Filled! Cycle Complete.")
+				
+				s.mu.Lock()
 				s.currentState = StateIdle
+				s.currentTPOrderID = 0
+				s.mu.Unlock()
+				
 				s.exchange.CancelAllOrders()
 				// Wait a bit before next cycle
 				time.Sleep(5 * time.Second)
 			} else { // Safety Order Filled
-				utils.Logger.Info("Safety Order Filled. Re-calculating TP.")
-				go s.updateTP()
+				if order.Side == futures.SideTypeBuy {
+					utils.Logger.Info("Safety Order Filled. Re-calculating TP.")
+					go s.updateTP()
+				}
 			}
 		}
 	}
@@ -251,7 +262,10 @@ func (s *MartingaleStrategy) placeGridOrders() {
 	}
 	entryPrice, _ := strconv.ParseFloat(pos.EntryPrice, 64)
 	
+	s.mu.RLock()
 	atr := s.currentATR
+	s.mu.RUnlock()
+
 	if atr == 0 {
 		atr = entryPrice * 0.01 // Fallback 1%
 	}
@@ -291,20 +305,41 @@ func (s *MartingaleStrategy) updateTP() {
 	// 1. Get updated position
 	pos, err := s.exchange.GetPosition()
 	if err != nil {
+		utils.Logger.Error("Failed to get position for TP update", zap.Error(err))
 		return
 	}
 	
 	avgPrice, _ := strconv.ParseFloat(pos.EntryPrice, 64)
 	amt, _ := strconv.ParseFloat(pos.PositionAmt, 64)
 	
-	// 2. Calculate TP Price: Avg + ATR
+	// If position is closed, we don't need a TP
+	if math.Abs(amt) == 0 {
+		s.mu.Lock()
+		s.currentTPOrderID = 0
+		s.mu.Unlock()
+		return
+	}
+	
+	s.mu.RLock()
+	// Safety check: if state is IDLE, don't update TP (cycle finished)
+	if s.currentState == StateIdle {
+		s.mu.RUnlock()
+		return
+	}
 	atr := s.currentATR
+	oldTPID := s.currentTPOrderID
+	s.mu.RUnlock()
+
+	// 2. Calculate TP Price: Avg + ATR
 	tpPrice := avgPrice + atr
 	
-	// 3. Cancel old TP (if we track it, or just CancelAll sells)
-	// For simplicity, we can't easily cancel just TP without ID tracking.
-	// But in this logic, we place TP as a LIMIT SELL.
-	// We might need to cancel all open SELLS first.
+	// 3. Cancel old TP
+	if oldTPID != 0 {
+		utils.Logger.Info("Cancelling old TP", zap.Int64("id", oldTPID))
+		if err := s.exchange.CancelOrder(oldTPID); err != nil {
+			utils.Logger.Warn("Failed to cancel old TP (might be filled or already canceled)", zap.Error(err))
+		}
+	}
 	
 	// 4. Place new TP
 	// TP Qty = Full Position
@@ -312,7 +347,22 @@ func (s *MartingaleStrategy) updateTP() {
 	tpPrice = utils.ToFixed(tpPrice, s.pricePrecision)
 	
 	utils.Logger.Info("Updating TP", zap.Float64("Price", tpPrice), zap.Float64("Qty", amt))
-	s.exchange.PlaceOrder(futures.SideTypeSell, futures.OrderTypeLimit, math.Abs(amt), tpPrice)
+	
+	resp, err := s.exchange.PlaceOrder(futures.SideTypeSell, futures.OrderTypeLimit, math.Abs(amt), tpPrice)
+	if err != nil {
+		utils.Logger.Error("Failed to place TP order", zap.Error(err))
+		return
+	}
+
+	s.mu.Lock()
+	if s.currentState == StateIdle {
+		s.mu.Unlock()
+		utils.Logger.Info("Cycle finished during TP update, cancelling new TP", zap.Int64("id", resp.OrderID))
+		go s.exchange.CancelOrder(resp.OrderID)
+		return
+	}
+	s.currentTPOrderID = resp.OrderID
+	s.mu.Unlock()
 }
 
 func (s *MartingaleStrategy) updateATR() {
