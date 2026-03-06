@@ -4,6 +4,9 @@ FROM golang:1.25-alpine AS builder
 WORKDIR /app
 
 # Dependencies
+# Install build tools for CGO (needed for go-sqlite3)
+RUN apk add --no-cache gcc musl-dev
+
 COPY go.mod go.sum ./
 RUN go mod download
 
@@ -11,6 +14,8 @@ RUN go mod download
 COPY . .
 
 # Build
+# Enable CGO for sqlite3
+ENV CGO_ENABLED=1
 RUN go build -o bot cmd/bot/main.go
 
 # Runtime Stage
