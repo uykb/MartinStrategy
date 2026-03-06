@@ -85,10 +85,15 @@ func (s *MartingaleStrategy) initSymbolInfo() error {
 	// Qty Precision: 2 (0.01) or 3 (0.001) or 0 (1)
 	
 	// Assuming HYPEUSDT has:
+	// Price Precision: 3 (0.001) based on user input
+	// Qty Precision: 0 (1.0) or 1 (0.1) - let's assume 0.1 for now or 1?
+	// User said "minimum 0.50 quantity" previously, implying stepSize 0.01
+	// Let's stick to stepSize 0.01 for qty as per previous instruction, but fix price to 3 decimals.
+	
 	s.quantityPrecision = 2
-	s.pricePrecision = 4
+	s.pricePrecision = 3
 	s.stepSize = 0.01
-	s.tickSize = 0.0001
+	s.tickSize = 0.001
 	s.minQty = 0.01 // Default fallback
 	
 	utils.Logger.Info("Symbol Info Initialized (Hardcoded - Pending API impl)", 
