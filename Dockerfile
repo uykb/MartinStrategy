@@ -23,8 +23,9 @@ FROM alpine:3.18
 
 WORKDIR /app
 
-# Install certificates for HTTPS
-RUN apk --no-cache add ca-certificates
+# Install certificates for HTTPS and sqlite libs if needed (though static build usually bundles it)
+# sqlite3 dynamic lib might be needed if CGO linked dynamically
+RUN apk --no-cache add ca-certificates sqlite-libs
 
 COPY --from=builder /app/bot .
 COPY config.yaml .
