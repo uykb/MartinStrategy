@@ -168,43 +168,41 @@ func (s *MartingaleStrategy) handleOrderUpdate(ctx context.Context, event core.E
 	)
 
 	if order.Status == futures.OrderStatusTypeFilled {
-		if order.Type == futures.OrderTypeMarket { // Base order filled
+		if order.Side == futures.SideTypeBuy {
+			// Buy Order Filled (Base or Safety)
+			utils.Logger.Info("Buy Order Filled", zap.String("type", string(order.Type)))
+			
 			s.mu.Lock()
+			prevState := s.currentState
 			s.currentState = StateInPosition
 			s.mu.Unlock()
-			// Calculate ATR and Place Grid
-			go s.placeGridOrders()
-		} else if order.Type == futures.OrderTypeLimit {
-			// Could be Safety Order or Take Profit
-			
-			// Check if it's our TP order
-			s.mu.RLock()
-			isTP := false
-			if s.currentTPOrderID != 0 && order.ID == s.currentTPOrderID {
-				isTP = true
-			} else if order.Side == futures.SideTypeSell {
-				// Fallback: If we lost state or it's a sell limit, assume TP for Long strategy
-				isTP = true
+
+			if prevState == StateIdle || prevState == StatePlacingGrid {
+				// Base order filled -> Place Grid
+				go s.placeGridOrders()
+			} else {
+				// Safety order filled -> Update TP
+				utils.Logger.Info("Safety Order Filled. Re-calculating TP.")
+				go s.updateTP()
 			}
-			s.mu.RUnlock()
+		} else if order.Side == futures.SideTypeSell {
+			// Sell Order Filled (TP, Manual, or Stop)
+			// Assume any sell fill in Long strategy means closing/reducing position
+			// For simplicity in Martingale, we assume full close on TP
 			
-			if isTP { // TP Filled
-				utils.Logger.Info("Take Profit Filled! Cycle Complete.")
-				
-				s.mu.Lock()
-				s.currentState = StateIdle
-				s.currentTPOrderID = 0
-				s.mu.Unlock()
-				
-				s.exchange.CancelAllOrders()
-				// Wait a bit before next cycle
-				time.Sleep(5 * time.Second)
-			} else { // Safety Order Filled
-				if order.Side == futures.SideTypeBuy {
-					utils.Logger.Info("Safety Order Filled. Re-calculating TP.")
-					go s.updateTP()
-				}
-			}
+			utils.Logger.Info("Sell Order Filled (TP/Manual). Resetting to IDLE.", 
+				zap.String("type", string(order.Type)),
+				zap.String("status", string(order.Status)),
+			)
+			
+			s.mu.Lock()
+			s.currentState = StateIdle
+			s.currentTPOrderID = 0
+			s.mu.Unlock()
+			
+			s.exchange.CancelAllOrders()
+			// Wait a bit before next cycle
+			time.Sleep(5 * time.Second)
 		}
 	}
 	return nil
