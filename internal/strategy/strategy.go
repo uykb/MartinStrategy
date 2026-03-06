@@ -150,9 +150,14 @@ func (s *MartingaleStrategy) handleTick(ctx context.Context, event core.Event) e
 }
 
 func (s *MartingaleStrategy) handleOrderUpdate(ctx context.Context, event core.Event) error {
+	// The event data from binance.go is *futures.WsOrderTradeUpdate
+	// Let's assert it correctly
 	order, ok := event.Data.(*futures.WsOrderTradeUpdate)
 	if !ok {
-		return fmt.Errorf("invalid order update data")
+		// Try value type if pointer assertion fails, though binance.go sends pointer
+		// Or maybe it's wrapped in something else?
+		// Let's debug what we got
+		return fmt.Errorf("invalid order update data: expected *futures.WsOrderTradeUpdate, got %T", event.Data)
 	}
 
 	utils.Logger.Info("Order Update Received", 

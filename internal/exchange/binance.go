@@ -72,7 +72,10 @@ func (bc *BinanceClient) StartWS() error {
 		case futures.UserDataEventTypeOrderTradeUpdate:
 			o := event.OrderTradeUpdate
 			utils.Logger.Info("Order Update", zap.String("symbol", o.Symbol), zap.String("status", string(o.Status)))
-			bc.bus.Publish(core.EventOrderUpdate, o)
+			// Important: Pass the struct directly or pointer?
+			// event.OrderTradeUpdate is of type futures.WsOrderTradeUpdate (struct, not pointer)
+			// So we should probably pass a pointer to it to match the strategy expectation
+			bc.bus.Publish(core.EventOrderUpdate, &o)
 		case futures.UserDataEventTypeAccountUpdate:
 			// Handle position updates
 			for _, p := range event.AccountUpdate.Positions {
