@@ -105,6 +105,12 @@ func (s *MartingaleStrategy) initSymbolInfo() error {
 }
 
 func (s *MartingaleStrategy) syncState() {
+	// Note: We avoid holding s.mu.Lock() for the entire duration if we do heavy network calls
+	// But syncState is initialization, so it's fine.
+	
+	// 1. Get Position (Network call, could be outside lock, but we need atomic update)
+	// Let's do it inside for simplicity as it's init.
+	
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -119,6 +125,54 @@ func (s *MartingaleStrategy) syncState() {
 	amt, _ := strconv.ParseFloat(pos.PositionAmt, 64)
 	if math.Abs(amt) > 0 {
 		s.currentState = StateInPosition
+		
+		// If in position, we MUST ensure we have a TP order.
+		// Since we might have restarted, our memory (currentTPOrderID) is lost.
+		
+		// 1. Update ATR (Critical for TP calculation)
+		// Note: updateATR makes a network call. Inside Lock it blocks, but for init it's acceptable.
+		s.updateATR()
+		
+		// 2. Check Open Orders
+		orders, err := s.exchange.GetOpenOrders()
+		if err != nil {
+			utils.Logger.Error("Failed to get open orders", zap.Error(err))
+		} else {
+			hasTP := false
+			// Simple check: do we have any Sell Limit orders?
+			// In a complex bot, we'd check ClientOrderID or Metadata.
+			for _, o := range orders {
+				if o.Side == futures.SideTypeSell && o.Type == futures.OrderTypeLimit {
+					hasTP = true
+					s.currentTPOrderID = o.ID
+					utils.Logger.Info("Found existing TP order", zap.Int64("id", o.ID))
+					break
+				}
+			}
+			
+			if !hasTP {
+				utils.Logger.Warn("Detected position without TP order. Restoring TP...")
+				// We launch this in a goroutine to avoid deadlock if updateTP needs lock (it does RLock)
+				// But wait, updateTP needs RLock, we hold Lock. Deadlock!
+				// We must release lock before calling updateTP, or updateTP shouldn't lock if called internally.
+				// Better: Release lock, then call updateTP.
+				
+				// But we are in defer s.mu.Unlock().
+				// Let's use a flag and do it after unlock?
+				// Or spawn a goroutine that waits a bit?
+				// safest: spawn goroutine.
+				go func() {
+					// Wait a tiny bit for this lock to release
+					time.Sleep(100 * time.Millisecond)
+					s.updateTP()
+				}()
+			} else {
+				// If we have TP, we might also want to restore Grid Orders if they are missing?
+				// For now, let's just log.
+				utils.Logger.Info("State restored with existing TP.", zap.Int("open_orders", len(orders)))
+			}
+		}
+
 	} else {
 		s.currentState = StateIdle
 	}
