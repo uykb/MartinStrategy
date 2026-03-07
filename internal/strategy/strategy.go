@@ -274,10 +274,25 @@ func (s *MartingaleStrategy) placeGridOrders() {
 	
 	utils.Logger.Info("Placing Grid Orders", zap.Float64("Entry", entryPrice), zap.Float64("ATR", atr), zap.Float64("UnitQty", unitQty))
 
+	// Define Multiplier Sequence (Piecewise Function)
+	// [1.0, 1.0, 3.1, 2.1, 4.25, 4.25, 6.5]
+	multipliers := []float64{1.0, 1.0, 3.1, 2.1, 4.25, 4.25, 6.5}
+	
+	currentPriceLevel := entryPrice
+
 	for i := 1; i <= s.cfg.MaxSafetyOrders; i++ {
-		// Calculate Price: Entry - (ATR * Multiplier * i)
-		stepDist := atr * s.cfg.AtrMultiplier * float64(i) // Simplified linear step for demo
-		price := entryPrice - stepDist
+		// Calculate Price: Based on cumulative distance using multipliers
+		// Get multiplier for this step, default to last known or 1.0 if out of bounds
+		mult := 1.0
+		if i-1 < len(multipliers) {
+			mult = multipliers[i-1]
+		} else if len(multipliers) > 0 {
+			mult = multipliers[len(multipliers)-1]
+		}
+		
+		stepDist := atr * mult
+		price := currentPriceLevel - stepDist
+		currentPriceLevel = price // Update for next step (relative distance)
 		
 		// Ensure price precision
 		price = utils.ToFixed(price, s.pricePrecision) // Should align to tickSize really
@@ -288,6 +303,13 @@ func (s *MartingaleStrategy) placeGridOrders() {
 		
 		// Round qty to stepSize
 		qty = utils.RoundUpToTickSize(qty, s.stepSize)
+		
+		utils.Logger.Info("Placing Safety Order", 
+			zap.Int("index", i),
+			zap.Float64("price", price),
+			zap.Float64("qty", qty),
+			zap.Float64("dist_atr", mult),
+		)
 		
 		_, err := s.exchange.PlaceOrder(futures.SideTypeBuy, futures.OrderTypeLimit, qty, price)
 		if err != nil {
@@ -327,9 +349,9 @@ func (s *MartingaleStrategy) updateTP() {
 	atr := s.currentATR
 	oldTPID := s.currentTPOrderID
 	s.mu.RUnlock()
-
-	// 2. Calculate TP Price: Avg + ATR
-	tpPrice := avgPrice + atr
+	
+	// 2. Calculate TP Price: Avg + ATR * 0.8
+	tpPrice := avgPrice + (atr * 0.8)
 	
 	// 3. Cancel old TP
 	if oldTPID != 0 {

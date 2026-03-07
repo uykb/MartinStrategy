@@ -160,7 +160,7 @@ func (bc *BinanceClient) CancelOrder(orderID int64) error {
 func (bc *BinanceClient) GetKlines(limit int) ([]*futures.Kline, error) {
 	return bc.client.NewKlinesService().
 		Symbol(bc.cfg.Symbol).
-		Interval("15m").
+		Interval("1h").
 		Limit(limit).
 		Do(context.Background())
 }
