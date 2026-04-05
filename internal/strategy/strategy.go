@@ -42,8 +42,6 @@ type MartingaleStrategy struct {
 	activeOrders     map[int64]*futures.Order // Local cache of active orders
 	currentTPOrderID int64
 
-	currentATR float64
-
 	// Symbol Info
 	quantityPrecision int
 	pricePrecision    int
@@ -166,11 +164,7 @@ func (s *MartingaleStrategy) syncState() {
 		// If in position, we MUST ensure we have a TP order.
 		// Since we might have restarted, our memory (currentTPOrderID) is lost.
 
-		// 1. Update ATR (Critical for TP calculation)
-		// Note: updateATR makes a network call. Inside Lock it blocks, but for init it's acceptable.
-		s.updateATR()
-
-		// 2. Check Open Orders
+		// Check Open Orders
 		orders, err := s.exchange.GetOpenOrders()
 		if err != nil {
 			utils.Logger.Error("Failed to get open orders", zap.Error(err))
@@ -310,9 +304,6 @@ func (s *MartingaleStrategy) handleOrderUpdate(ctx context.Context, event core.E
 
 func (s *MartingaleStrategy) enterLong(currentPrice float64) error {
 	utils.Logger.Info("Entering Long Position...")
-
-	// Update ATR before entry (network call, no lock held)
-	s.updateATR()
 
 	// Calculate Base Quantity
 	// Logic: Unit = MinNotional (5 USDT) / Price -> rounded UP to stepSize
@@ -581,14 +572,6 @@ func (s *MartingaleStrategy) updateTP() {
 	}
 	s.currentTPOrderID = resp.OrderID
 	s.mu.Unlock()
-}
-
-func (s *MartingaleStrategy) updateATR() {
-	// Deprecated or can be kept as a default updater for s.currentATR if needed elsewhere
-	// But since we now fetch specific ATRs on demand, we can simplify or remove.
-	// For backward compatibility with other parts if they use s.currentATR:
-	s.currentATR = s.fetchATR("15m")
-	utils.Logger.Info("ATR Updated (Default 15m)", zap.Float64("ATR", s.currentATR))
 }
 
 func (s *MartingaleStrategy) fetchATR(interval string) float64 {
