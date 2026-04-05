@@ -426,18 +426,18 @@ func (s *MartingaleStrategy) placeGridOrders(execPrice float64) {
 	utils.Logger.Info("Placing Grid Orders", zap.Float64("Entry", entryPrice), zap.Float64("ATR30m", atr30m), zap.Float64("UnitQty", unitQty))
 
 	// Define Multiplier Sequence (Piecewise Function)
-	// 1: 30m, 2: 30m, 3: 1h, 4: 2h, 5: 4h, 6: 6h, 7: 8h, 8: 12h, 9: 1D
+	// 1: 30m, 2: 1h, 3: 30m+1h, 4: 2h, 5: 4h, 6: 6h, 7: 8h, 8: 12h, 9: 1D
 	// Distances are relative to previous order
 	gridDistances := []float64{
-		atr30m, // 1
-		atr30m, // 2
-		atr1h,  // 3
-		atr2h,  // 4
-		atr4h,  // 5
-		atr6h,  // 6
-		atr8h,  // 7
-		atr12h, // 8
-		atr1d,  // 9
+		atr30m,       // 1
+		atr1h,        // 2
+		atr30m + atr1h, // 3
+		atr2h,        // 4
+		atr4h,        // 5
+		atr6h,        // 6
+		atr8h,        // 7
+		atr12h,       // 8
+		atr1d,        // 9
 	}
 
 	currentPriceLevel := entryPrice
@@ -536,15 +536,15 @@ func (s *MartingaleStrategy) updateTP() {
 		s.mu.RUnlock()
 		return
 	}
-	// Always use 15m ATR for TP as requested
-	atr15m := s.fetchATR("15m")
-	if atr15m == 0 {
-		atr15m = avgPrice * 0.01
+	// Always use 30m ATR for TP as requested
+	atr30m := s.fetchATR("30m")
+	if atr30m == 0 {
+		atr30m = avgPrice * 0.01
 	}
 	oldTPID := s.currentTPOrderID
 	s.mu.RUnlock()
 
-	tpPrice := avgPrice + atr15m
+	tpPrice := avgPrice + atr30m
 
 	// 3. Cancel old TP
 	if oldTPID != 0 {
