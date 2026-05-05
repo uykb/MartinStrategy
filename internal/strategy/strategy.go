@@ -415,6 +415,28 @@ func (s *MartingaleStrategy) placeGridOrders(execPrice float64) {
 	}
 	s.mu.RUnlock()
 
+	// 检查是否已有活跃的网格订单（防止重启后重复放置）
+	existingOrders, err := s.exchange.GetOpenOrders()
+	if err == nil && len(existingOrders) > 0 {
+		// 计算除了 TP 以外的网格订单数量
+		gridCount := 0
+		for _, o := range existingOrders {
+			if o.Side == futures.SideTypeBuy {
+				gridCount++
+			}
+		}
+		if gridCount > 0 {
+			utils.Logger.Warn("placeGridOrders skipped: existing grid orders found",
+				zap.Int("existing_grid_count", gridCount),
+				zap.Int("total_orders", len(existingOrders)))
+			// 更新 gridPlaced 标记为 true
+			s.mu.Lock()
+			s.gridPlaced = true
+			s.mu.Unlock()
+			return
+		}
+	}
+
 	// 防并发：如果已有实例在执行则跳过
 	if !s.gridMu.TryLock() {
 		s.mu.Lock()
