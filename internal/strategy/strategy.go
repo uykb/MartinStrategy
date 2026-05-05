@@ -167,6 +167,8 @@ func (s *MartingaleStrategy) syncState() {
 	amt, _ := strconv.ParseFloat(pos.PositionAmt, 64)
 	if math.Abs(amt) > 0 {
 		s.currentState = StateInPosition
+		s.gridPlaced = true // 如果有持仓，说明网格已放置
+		utils.Logger.Info("State Synced (Has Position)", zap.String("state", string(s.currentState)), zap.Float64("amt", amt))
 
 		// If in position, we MUST ensure we have a TP order.
 		// Since we might have restarted, our memory (currentTPOrderID) is lost.
@@ -213,9 +215,11 @@ func (s *MartingaleStrategy) syncState() {
 
 	} else {
 		s.currentState = StateIdle
+		s.gridPlaced = false     // 重置网格标志，准备下一轮
+		s.currentTPOrderID = 0   // 重置 TP 订单 ID
+		s.activeOrders = make(map[int64]*futures.Order) // 清空订单缓存
+		utils.Logger.Info("State Synced (No Position)", zap.String("state", string(s.currentState)))
 	}
-
-	utils.Logger.Info("State Synced", zap.String("state", string(s.currentState)), zap.Float64("amt", amt))
 }
 
 // Event Handlers
