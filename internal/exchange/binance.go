@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/adshao/go-binance/v2"
@@ -84,7 +85,9 @@ func (bc *BinanceClient) StartWS() error {
 	utils.Logger.Info("User data stream connected")
 
 	// Connect to Market Stream (AggTrade for price)
-	utils.Logger.Info("Connecting to market stream", zap.String("symbol", bc.cfg.Symbol))
+	// WebSocket stream symbol must be lowercase
+	symbolLower := strings.ToLower(bc.cfg.Symbol)
+	utils.Logger.Info("Connecting to market stream", zap.String("symbol", symbolLower))
 
 	wsMarketHandler := func(event *futures.WsAggTradeEvent) {
 		price, _ := strconv.ParseFloat(event.Price, 64)
@@ -92,7 +95,7 @@ func (bc *BinanceClient) StartWS() error {
 		bc.bus.Publish(core.EventTick, price)
 	}
 
-	doneM, stopM, err := futures.WsAggTradeServe(bc.cfg.Symbol, wsMarketHandler, errHandler)
+	doneM, stopM, err := futures.WsAggTradeServe(symbolLower, wsMarketHandler, errHandler)
 	if err != nil {
 		return fmt.Errorf("failed to start market stream: %w", err)
 	}
