@@ -56,6 +56,9 @@ type MartingaleStrategy struct {
 	// 监控计数器
 	gridSkipCount int64 // placeGridOrders 跳过次数
 	tpSkipCount   int64 // updateTP 跳过次数
+
+	// 状态标志
+	gridPlaced bool // 标志网格是否已放置，防止重复
 }
 
 func NewMartingaleStrategy(cfg *config.StrategyConfig, ex *exchange.BinanceClient, st *storage.Database, bus *core.EventBus) *MartingaleStrategy {
@@ -228,6 +231,7 @@ func (s *MartingaleStrategy) handleTick(ctx context.Context, event core.Event) e
 		return nil
 	}
 	s.currentState = StatePlacingGrid
+	s.gridPlaced = false // 重置网格标志
 	s.mu.Unlock()
 
 	// 网络请求在锁外执行
@@ -336,6 +340,7 @@ func (s *MartingaleStrategy) handleOrderUpdate(ctx context.Context, event core.E
 			s.mu.Lock()
 			s.currentState = StateIdle
 			s.currentTPOrderID = 0
+			s.gridPlaced = false // 重置网格标志，准备下一轮
 			s.mu.Unlock()
 
 			s.exchange.CancelAllOrders()
@@ -383,6 +388,15 @@ func (s *MartingaleStrategy) enterLong(currentPrice float64) error {
 func (s *MartingaleStrategy) placeGridOrders(execPrice float64) {
 	utils.Logger.Info("placeGridOrders started", zap.Float64("execPrice", execPrice))
 
+	// 检查网格是否已放置，防止重复
+	s.mu.RLock()
+	if s.gridPlaced {
+		s.mu.RUnlock()
+		utils.Logger.Warn("placeGridOrders skipped: grid already placed")
+		return
+	}
+	s.mu.RUnlock()
+
 	// 防并发：如果已有实例在执行则跳过
 	if !s.gridMu.TryLock() {
 		s.mu.Lock()
@@ -395,7 +409,14 @@ func (s *MartingaleStrategy) placeGridOrders(execPrice float64) {
 	}
 	defer s.gridMu.Unlock()
 
-	utils.Logger.Info("placeGridOrders acquired lock")
+	// 再次检查（获取锁后）
+	s.mu.RLock()
+	if s.gridPlaced {
+		s.mu.RUnlock()
+		utils.Logger.Warn("placeGridOrders skipped: grid already placed (after lock)")
+		return
+	}
+	s.mu.RUnlock()
 
 	var entryPrice float64
 
@@ -534,6 +555,12 @@ func (s *MartingaleStrategy) placeGridOrders(execPrice float64) {
 
 	// Place Initial TP
 	s.updateTP()
+
+	// 标记网格已放置
+	s.mu.Lock()
+	s.gridPlaced = true
+	s.mu.Unlock()
+	utils.Logger.Info("Grid orders placed successfully, gridPlaced=true")
 }
 
 func (s *MartingaleStrategy) updateTP() {
