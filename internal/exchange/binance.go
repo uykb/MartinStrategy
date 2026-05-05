@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/adshao/go-binance/v2"
@@ -44,8 +43,8 @@ func NewBinanceClient(cfg *config.ExchangeConfig, bus *core.EventBus) *BinanceCl
 	}
 }
 
-// StartWS connects to the websocket stream
-func (bc *BinanceClient) StartWS() error {
+// StartUserStream connects to the user data stream (order updates)
+func (bc *BinanceClient) StartUserStream() error {
 	// Sync Server Time first
 	if _, err := bc.client.NewSetServerTimeService().Do(context.Background()); err != nil {
 		utils.Logger.Error("Failed to sync server time", zap.Error(err))
@@ -78,38 +77,11 @@ func (bc *BinanceClient) StartWS() error {
 		utils.Logger.Error("WS Error", zap.Error(err))
 	}
 
-	doneC, stopC, err := futures.WsUserDataServe(listenKey, wsUserHandler, errHandler)
+	doneC, _, err := futures.WsUserDataServe(listenKey, wsUserHandler, errHandler)
 	if err != nil {
 		return fmt.Errorf("failed to start user stream: %w", err)
 	}
 	utils.Logger.Info("User data stream connected")
-
-	// Connect to Market Stream (AggTrade for price)
-	// WebSocket stream symbol must be lowercase
-	symbolLower := strings.ToLower(bc.cfg.Symbol)
-	utils.Logger.Info("Connecting to market stream", zap.String("symbol", symbolLower))
-
-	wsMarketHandler := func(event *futures.WsAggTradeEvent) {
-		price, _ := strconv.ParseFloat(event.Price, 64)
-		utils.Logger.Info("Tick received from WS", zap.Float64("price", price))
-		bc.bus.Publish(core.EventTick, price)
-	}
-
-	doneM, stopM, err := futures.WsAggTradeServe(symbolLower, wsMarketHandler, errHandler)
-	if err != nil {
-		return fmt.Errorf("failed to start market stream: %w", err)
-	}
-	utils.Logger.Info("Market stream connected", zap.String("symbol", bc.cfg.Symbol))
-
-	go func() {
-		<-doneC
-		utils.Logger.Warn("User data stream disconnected")
-	}()
-
-	go func() {
-		<-doneM
-		utils.Logger.Warn("Market stream disconnected")
-	}()
 
 	// Keep alive user stream every 30m
 	go func() {
@@ -131,8 +103,7 @@ func (bc *BinanceClient) StartWS() error {
 		}
 	}()
 
-	_ = stopC
-	_ = stopM
+	_ = doneC
 
 	return nil
 }
@@ -200,4 +171,39 @@ func (bc *BinanceClient) GetKlines(interval string, limit int) ([]*futures.Kline
 		Interval(interval).
 		Limit(limit).
 		Do(context.Background())
+}
+
+func (bc *BinanceClient) GetLatestPrice() (float64, error) {
+	klines, err := bc.client.NewKlinesService().
+		Symbol(bc.cfg.Symbol).
+		Interval("1m").
+		Limit(1).
+		Do(context.Background())
+	if err != nil {
+		return 0, err
+	}
+	if len(klines) == 0 {
+		return 0, fmt.Errorf("no kline data")
+	}
+	price, err := strconv.ParseFloat(klines[0].Close, 64)
+	if err != nil {
+		return 0, err
+	}
+	return price, nil
+}
+
+func (bc *BinanceClient) StartPricePolling(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	utils.Logger.Info("Price polling started", zap.Duration("interval", interval))
+
+	for range ticker.C {
+		price, err := bc.GetLatestPrice()
+		if err != nil {
+			utils.Logger.Error("Failed to get latest price", zap.Error(err))
+			continue
+		}
+		bc.bus.Publish(core.EventTick, price)
+	}
 }

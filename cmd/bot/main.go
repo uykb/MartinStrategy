@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/uykb/MartinStrategy/internal/config"
 	"github.com/uykb/MartinStrategy/internal/core"
@@ -48,9 +49,12 @@ func main() {
 
 	// 5. Exchange
 	ex := exchange.NewBinanceClient(&cfg.Exchange, bus)
-	if err := ex.StartWS(); err != nil {
-		utils.Logger.Fatal("Failed to start exchange WS", zap.Error(err))
+	if err := ex.StartUserStream(); err != nil {
+		utils.Logger.Fatal("Failed to start user stream", zap.Error(err))
 	}
+
+	// 6. Start price polling (REST API fallback for markets without WS data)
+	go ex.StartPricePolling(10 * time.Second)
 
 	// 6. Strategy
 	strat := strategy.NewMartingaleStrategy(&cfg.Strategy, ex, db, bus)
