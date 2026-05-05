@@ -61,12 +61,31 @@ func (bc *BinanceClient) StartUserStream() error {
 	// Start periodic time sync every 5 minutes
 	go bc.periodicTimeSync()
 
-	listenKey, err := bc.client.NewStartUserStreamService().Do(context.Background())
-	if err != nil {
-		return fmt.Errorf("failed to start user stream: %w", err)
+	// Start user stream with retry logic
+	return bc.connectUserStreamWithRetry()
+}
+
+func (bc *BinanceClient) connectUserStreamWithRetry() error {
+	maxRetries := 5
+	retryDelay := 2 * time.Second
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		listenKey, err := bc.client.NewStartUserStreamService().Do(context.Background())
+		if err != nil {
+			utils.Logger.Error("Failed to start user stream",
+				zap.Int("attempt", attempt),
+				zap.Error(err))
+			if attempt < maxRetries {
+				time.Sleep(retryDelay * time.Duration(attempt))
+				continue
+			}
+			return fmt.Errorf("failed to start user stream after %d attempts: %w", maxRetries, err)
+		}
+
+		bc.listenKey = listenKey
+		utils.Logger.Info("User stream started", zap.String("listenKey", listenKey))
+		break
 	}
-	bc.listenKey = listenKey
-	utils.Logger.Info("User stream started", zap.String("listenKey", listenKey))
 
 	wsUserHandler := func(event *futures.WsUserDataEvent) {
 		switch event.Event {
@@ -91,13 +110,13 @@ func (bc *BinanceClient) StartUserStream() error {
 		utils.Logger.Error("WS Error", zap.Error(err))
 	}
 
-	doneC, _, err := futures.WsUserDataServe(listenKey, wsUserHandler, errHandler)
+	doneC, _, err := futures.WsUserDataServe(bc.listenKey, wsUserHandler, errHandler)
 	if err != nil {
 		return fmt.Errorf("failed to start user stream: %w", err)
 	}
 	utils.Logger.Info("User data stream connected")
 
-	// Keep alive user stream every 15m (Binance recommends 30m but we use 15m for safety)
+	// Keep alive user stream every 15m (Binance requires keepalive within 60m)
 	go bc.keepUserStreamAlive()
 
 	// Monitor connection and reconnect if needed
@@ -125,6 +144,7 @@ func (bc *BinanceClient) periodicTimeSync() {
 }
 
 func (bc *BinanceClient) keepUserStreamAlive() {
+	// Binance requires keepalive within 60 minutes, we use 15 minutes for safety
 	ticker := time.NewTicker(15 * time.Minute)
 	defer ticker.Stop()
 
@@ -162,25 +182,33 @@ func (bc *BinanceClient) monitorUserStream(doneC <-chan struct{}) {
 		return
 	}
 
-	// Wait a bit before reconnecting
-	time.Sleep(5 * time.Second)
+	// Wait before reconnecting with exponential backoff
+	backoff := 2 * time.Second
+	for i := 0; i < 5; i++ {
+		bc.userStreamMu.Lock()
+		stopCh := bc.userStreamStopCh
+		bc.userStreamMu.Unlock()
 
-	// Reconnect
-	bc.userStreamMu.Lock()
-	stopCh := bc.userStreamStopCh
-	bc.userStreamMu.Unlock()
+		select {
+		case <-stopCh:
+			return
+		default:
+			utils.Logger.Info("Reconnecting to user stream...",
+				zap.Int("attempt", i+1),
+				zap.Duration("backoff", backoff))
+			time.Sleep(backoff)
 
-	select {
-	case <-stopCh:
-		return
-	default:
-		utils.Logger.Info("Reconnecting to user stream...")
-		if err := bc.StartUserStream(); err != nil {
-			utils.Logger.Error("Failed to reconnect user stream", zap.Error(err))
-		} else {
+			if err := bc.connectUserStreamWithRetry(); err != nil {
+				utils.Logger.Error("Failed to reconnect user stream", zap.Error(err))
+				backoff *= 2 // Exponential backoff
+				continue
+			}
 			utils.Logger.Info("Successfully reconnected to user stream")
+			return
 		}
 	}
+
+	utils.Logger.Error("Failed to reconnect user stream after multiple attempts")
 }
 
 func (bc *BinanceClient) StopUserStream() {
