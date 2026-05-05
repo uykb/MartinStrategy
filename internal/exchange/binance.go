@@ -59,10 +59,17 @@ func (bc *BinanceClient) StartUserStream() error {
 
 	// User Data WS handler
 	wsUserHandler := func(event *futures.WsUserDataEvent) {
+		utils.Logger.Info("User stream event received",
+			zap.String("event", string(event.Event)),
+			zap.String("symbol", bc.cfg.Symbol))
 		switch event.Event {
 		case futures.UserDataEventTypeOrderTradeUpdate:
 			o := event.OrderTradeUpdate
-			utils.Logger.Info("Order Update", zap.String("symbol", o.Symbol), zap.String("status", string(o.Status)))
+			utils.Logger.Info("Order Trade Update received",
+				zap.String("symbol", o.Symbol),
+				zap.String("status", string(o.Status)),
+				zap.String("side", string(o.Side)),
+				zap.Int64("orderId", o.ID))
 			bc.bus.Publish(core.EventOrderUpdate, &o)
 		case futures.UserDataEventTypeAccountUpdate:
 			for _, p := range event.AccountUpdate.Positions {
