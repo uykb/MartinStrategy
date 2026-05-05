@@ -3,7 +3,7 @@ module github.com/uykb/MartinStrategy
 go 1.25.4
 
 require (
-	github.com/adshao/go-binance/v2 v2.8.10
+	github.com/adshao/go-binance/v2 v2.8.11
 	github.com/glebarez/sqlite v1.11.0
 	github.com/markcheno/go-talib v0.0.0-20250114000313-ec55a20c902f
 	github.com/redis/go-redis/v9 v9.18.0
@@ -13,7 +13,7 @@ require (
 )
 
 require (
-	github.com/bitly/go-simplejson v0.5.0 // indirect
+	github.com/bitly/go-simplejson v0.5.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect

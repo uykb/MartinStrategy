@@ -51,11 +51,15 @@ func (bc *BinanceClient) StartUserStream() error {
 	bc.userStreamStopCh = make(chan struct{})
 	bc.userStreamDoneCh = make(chan struct{})
 
+	// Sync server time at startup
 	if offset, err := bc.client.NewSetServerTimeService().Do(context.Background()); err != nil {
 		utils.Logger.Error("Failed to sync server time", zap.Error(err))
 	} else {
 		utils.Logger.Info("Server time synced", zap.Int64("offset_ms", offset))
 	}
+
+	// Start periodic time sync every 5 minutes
+	go bc.periodicTimeSync()
 
 	listenKey, err := bc.client.NewStartUserStreamService().Do(context.Background())
 	if err != nil {
@@ -100,6 +104,24 @@ func (bc *BinanceClient) StartUserStream() error {
 	go bc.monitorUserStream(doneC)
 
 	return nil
+}
+
+func (bc *BinanceClient) periodicTimeSync() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-bc.userStreamStopCh:
+			return
+		case <-ticker.C:
+			if offset, err := bc.client.NewSetServerTimeService().Do(context.Background()); err != nil {
+				utils.Logger.Error("Periodic time sync failed", zap.Error(err))
+			} else {
+				utils.Logger.Debug("Periodic time sync", zap.Int64("offset_ms", offset))
+			}
+		}
+	}
 }
 
 func (bc *BinanceClient) keepUserStreamAlive() {
