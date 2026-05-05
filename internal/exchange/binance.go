@@ -51,8 +51,10 @@ func (bc *BinanceClient) StartUserStream() error {
 	bc.userStreamStopCh = make(chan struct{})
 	bc.userStreamDoneCh = make(chan struct{})
 
-	if _, err := bc.client.NewSetServerTimeService().Do(context.Background()); err != nil {
+	if offset, err := bc.client.NewSetServerTimeService().Do(context.Background()); err != nil {
 		utils.Logger.Error("Failed to sync server time", zap.Error(err))
+	} else {
+		utils.Logger.Info("Server time synced", zap.Int64("offset_ms", offset))
 	}
 
 	listenKey, err := bc.client.NewStartUserStreamService().Do(context.Background())
