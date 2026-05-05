@@ -239,7 +239,51 @@ func (s *MartingaleStrategy) handleTick(ctx context.Context, event core.Event) e
 		utils.Logger.Error("enterLong failed, resetting to IDLE", zap.Error(err))
 		return err
 	}
+
+	// 等待订单成交，然后放置网格
+	// 每2秒检查一次，最多等待30秒
+	go s.waitForFillAndPlaceGrid()
+
 	return nil
+}
+
+func (s *MartingaleStrategy) waitForFillAndPlaceGrid() {
+	for i := 0; i < 15; i++ {
+		time.Sleep(2 * time.Second)
+
+		s.mu.RLock()
+		state := s.currentState
+		s.mu.RUnlock()
+
+		// 如果状态已经不是 PLACING_GRID，说明已经不需要了
+		if state != StatePlacingGrid {
+			utils.Logger.Info("waitForFillAndPlaceGrid: state changed, aborting",
+				zap.String("state", string(state)))
+			return
+		}
+
+		// 检查持仓
+		pos, err := s.exchange.GetPosition()
+		if err != nil {
+			utils.Logger.Error("Failed to get position", zap.Error(err))
+			continue
+		}
+
+		amt, _ := strconv.ParseFloat(pos.PositionAmt, 64)
+		if math.Abs(amt) > 0 {
+			entryPrice, _ := strconv.ParseFloat(pos.EntryPrice, 64)
+			utils.Logger.Info("Position detected, placing grid orders",
+				zap.Float64("amt", amt),
+				zap.Float64("entryPrice", entryPrice))
+			s.placeGridOrders(entryPrice)
+			return
+		}
+	}
+
+	utils.Logger.Warn("waitForFillAndPlaceGrid: timeout, no position found")
+	s.mu.Lock()
+	s.currentState = StateIdle
+	s.mu.Unlock()
 }
 
 func (s *MartingaleStrategy) handleOrderUpdate(ctx context.Context, event core.Event) error {
@@ -267,10 +311,12 @@ func (s *MartingaleStrategy) handleOrderUpdate(ctx context.Context, event core.E
 			s.currentState = StateInPosition
 			s.mu.Unlock()
 
+			// Get execution price from order event
+			execPrice, _ := strconv.ParseFloat(order.AveragePrice, 64)
+
 			if prevState == StateIdle || prevState == StatePlacingGrid {
 				// Base order filled -> Place Grid
-				// Get execution price from order event to avoid race condition with position API
-				execPrice, _ := strconv.ParseFloat(order.AveragePrice, 64)
+				utils.Logger.Info("Base order filled, placing grid orders", zap.Float64("execPrice", execPrice))
 				go s.placeGridOrders(execPrice)
 			} else {
 				// Safety order filled -> Update TP
