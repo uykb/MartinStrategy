@@ -219,6 +219,8 @@ func (s *MartingaleStrategy) handleTick(ctx context.Context, event core.Event) e
 		return fmt.Errorf("invalid tick data")
 	}
 
+	utils.Logger.Info("Tick received", zap.Float64("price", price), zap.String("state", string(s.currentState)))
+
 	// 原子状态检查
 	s.mu.Lock()
 	if s.currentState != StateIdle {

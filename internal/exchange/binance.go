@@ -48,7 +48,6 @@ func (bc *BinanceClient) StartWS() error {
 	// Sync Server Time first
 	if _, err := bc.client.NewSetServerTimeService().Do(context.Background()); err != nil {
 		utils.Logger.Error("Failed to sync server time", zap.Error(err))
-		// We continue anyway, hoping it's a transient network issue
 	}
 
 	// Connect to User Data Stream (Order Updates)
@@ -56,28 +55,16 @@ func (bc *BinanceClient) StartWS() error {
 	if err != nil {
 		return fmt.Errorf("failed to start user stream: %w", err)
 	}
+	utils.Logger.Info("User stream started", zap.String("listenKey", listenKey))
 
-	go func() {
-		// Keep alive user stream every 30m
-		ticker := time.NewTicker(30 * time.Minute)
-		defer ticker.Stop()
-		for range ticker.C {
-			bc.client.NewKeepaliveUserStreamService().ListenKey(listenKey).Do(context.Background())
-		}
-	}()
-
-	// User Data WS
+	// User Data WS handler
 	wsUserHandler := func(event *futures.WsUserDataEvent) {
 		switch event.Event {
 		case futures.UserDataEventTypeOrderTradeUpdate:
 			o := event.OrderTradeUpdate
 			utils.Logger.Info("Order Update", zap.String("symbol", o.Symbol), zap.String("status", string(o.Status)))
-			// Important: Pass the struct directly or pointer?
-			// event.OrderTradeUpdate is of type futures.WsOrderTradeUpdate (struct, not pointer)
-			// So we should probably pass a pointer to it to match the strategy expectation
 			bc.bus.Publish(core.EventOrderUpdate, &o)
 		case futures.UserDataEventTypeAccountUpdate:
-			// Handle position updates
 			for _, p := range event.AccountUpdate.Positions {
 				if p.Symbol == bc.cfg.Symbol {
 					bc.bus.Publish(core.EventPositionUpdate, p)
@@ -85,33 +72,64 @@ func (bc *BinanceClient) StartWS() error {
 			}
 		}
 	}
-	
+
 	errHandler := func(err error) {
 		utils.Logger.Error("WS Error", zap.Error(err))
 	}
 
 	doneC, stopC, err := futures.WsUserDataServe(listenKey, wsUserHandler, errHandler)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to start user stream: %w", err)
 	}
-	
+	utils.Logger.Info("User data stream connected")
+
 	// Connect to Market Stream (AggTrade for price)
+	utils.Logger.Info("Connecting to market stream", zap.String("symbol", bc.cfg.Symbol))
+
 	wsMarketHandler := func(event *futures.WsAggTradeEvent) {
 		price, _ := strconv.ParseFloat(event.Price, 64)
+		utils.Logger.Info("Tick received from WS", zap.Float64("price", price))
 		bc.bus.Publish(core.EventTick, price)
 	}
-	
+
 	doneM, stopM, err := futures.WsAggTradeServe(bc.cfg.Symbol, wsMarketHandler, errHandler)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to start market stream: %w", err)
 	}
+	utils.Logger.Info("Market stream connected", zap.String("symbol", bc.cfg.Symbol))
 
 	go func() {
 		<-doneC
-		<-doneM
-		close(stopC)
-		close(stopM)
+		utils.Logger.Warn("User data stream disconnected")
 	}()
+
+	go func() {
+		<-doneM
+		utils.Logger.Warn("Market stream disconnected")
+	}()
+
+	// Keep alive user stream every 30m
+	go func() {
+		ticker := time.NewTicker(30 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			if err := bc.client.NewKeepaliveUserStreamService().ListenKey(listenKey).Do(context.Background()); err != nil {
+				utils.Logger.Error("Failed to keepalive user stream", zap.Error(err))
+			}
+		}
+	}()
+
+	// Log WS status periodically
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			utils.Logger.Info("WebSocket connections active", zap.String("symbol", bc.cfg.Symbol))
+		}
+	}()
+
+	_ = stopC
+	_ = stopM
 
 	return nil
 }
