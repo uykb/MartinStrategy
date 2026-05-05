@@ -329,24 +329,33 @@ func (s *MartingaleStrategy) handleOrderUpdate(ctx context.Context, event core.E
 
 	if order.Status == futures.OrderStatusTypeFilled {
 		if order.Side == futures.SideTypeBuy {
-			// Buy Order Filled (Base or Safety)
-			utils.Logger.Info("Buy Order Filled", zap.String("type", string(order.Type)))
+			buyFilledPrice, _ := strconv.ParseFloat(order.AveragePrice, 64)
+			utils.Logger.Info("Buy Order Filled", zap.String("type", string(order.Type)), zap.Float64("execPrice", buyFilledPrice))
 
 			s.mu.Lock()
 			prevState := s.currentState
-			s.currentState = StateInPosition
 			s.mu.Unlock()
 
-			// Get execution price from order event
-			execPrice, _ := strconv.ParseFloat(order.AveragePrice, 64)
+			s.mu.RLock()
+			gridPlaced := s.gridPlaced
+			s.mu.RUnlock()
 
 			if prevState == StateIdle || prevState == StatePlacingGrid {
-				// Base order filled -> Place Grid
-				utils.Logger.Info("Base order filled, placing grid orders", zap.Float64("execPrice", execPrice))
-				go s.placeGridOrders(execPrice)
+				if !gridPlaced {
+					utils.Logger.Info("Base order filled, placing grid orders", zap.Float64("execPrice", buyFilledPrice))
+					s.mu.Lock()
+					s.currentState = StateInPosition
+					s.mu.Unlock()
+					go s.placeGridOrders(buyFilledPrice)
+				} else {
+					utils.Logger.Info("Base order filled but grid already placed, updating TP", zap.Float64("execPrice", buyFilledPrice))
+					s.mu.Lock()
+					s.currentState = StateInPosition
+					s.mu.Unlock()
+					go s.updateTP()
+				}
 			} else {
-				// Safety order filled -> Update TP
-				utils.Logger.Info("Safety Order Filled. Re-calculating TP.")
+				utils.Logger.Info("Safety order filled, re-calculating TP", zap.Float64("execPrice", buyFilledPrice))
 				go s.updateTP()
 			}
 		} else if order.Side == futures.SideTypeSell {
