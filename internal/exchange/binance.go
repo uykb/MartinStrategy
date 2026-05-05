@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/adshao/go-binance/v2"
@@ -18,50 +19,50 @@ type BinanceClient struct {
 	client *futures.Client
 	cfg    *config.ExchangeConfig
 	bus    *core.EventBus
+
+	// User stream management
+	userStreamMu     sync.Mutex
+	userStreamStopCh chan struct{}
+	userStreamDoneCh chan struct{}
+	listenKey        string
 }
 
 func NewBinanceClient(cfg *config.ExchangeConfig, bus *core.EventBus) *BinanceClient {
 	futures.UseTestnet = cfg.UseTestnet
 	client := binance.NewFuturesClient(cfg.ApiKey, cfg.ApiSecret)
-	// Enable time synchronization to avoid "Timestamp for this request was 1000ms ahead" errors
-	// For futures client, the method might be different or we need to access the embedded BaseClient
-	// Actually, go-binance futures client doesn't expose SetTimeOffset directly on the wrapper sometimes.
-	// But let's check: NewFuturesClient returns *futures.Client.
-	// It seems SetTimeOffset is not exported on futures.Client.
-	// We might need to call NewService to sync time manually or just ignore if library handles it.
-	// Wait, the library usually does this via:
-	// client.NewSetServerTimeService().Do(context.Background())
-	// Let's try that instead of the method which might be spot-only.
-	
-	// Sync time manually
-	// client.NewSetServerTimeService().Do(context.Background())
-	
+
 	return &BinanceClient{
-		client: client,
-		cfg:    cfg,
-		bus:    bus,
+		client:         client,
+		cfg:            cfg,
+		bus:            bus,
+		userStreamStopCh: make(chan struct{}),
+		userStreamDoneCh: make(chan struct{}),
 	}
 }
 
-// StartUserStream connects to the user data stream (order updates)
+// StartUserStream connects to the user data stream (order updates) with auto-reconnect
 func (bc *BinanceClient) StartUserStream() error {
-	// Sync Server Time first
+	bc.userStreamMu.Lock()
+	defer bc.userStreamMu.Unlock()
+
+	if bc.userStreamStopCh != nil {
+		close(bc.userStreamStopCh)
+	}
+	bc.userStreamStopCh = make(chan struct{})
+	bc.userStreamDoneCh = make(chan struct{})
+
 	if _, err := bc.client.NewSetServerTimeService().Do(context.Background()); err != nil {
 		utils.Logger.Error("Failed to sync server time", zap.Error(err))
 	}
 
-	// Connect to User Data Stream (Order Updates)
 	listenKey, err := bc.client.NewStartUserStreamService().Do(context.Background())
 	if err != nil {
 		return fmt.Errorf("failed to start user stream: %w", err)
 	}
+	bc.listenKey = listenKey
 	utils.Logger.Info("User stream started", zap.String("listenKey", listenKey))
 
-	// User Data WS handler
 	wsUserHandler := func(event *futures.WsUserDataEvent) {
-		utils.Logger.Info("User stream event received",
-			zap.String("event", string(event.Event)),
-			zap.String("symbol", bc.cfg.Symbol))
 		switch event.Event {
 		case futures.UserDataEventTypeOrderTradeUpdate:
 			o := event.OrderTradeUpdate
@@ -90,29 +91,83 @@ func (bc *BinanceClient) StartUserStream() error {
 	}
 	utils.Logger.Info("User data stream connected")
 
-	// Keep alive user stream every 30m
-	go func() {
-		ticker := time.NewTicker(30 * time.Minute)
-		defer ticker.Stop()
-		for range ticker.C {
-			if err := bc.client.NewKeepaliveUserStreamService().ListenKey(listenKey).Do(context.Background()); err != nil {
-				utils.Logger.Error("Failed to keepalive user stream", zap.Error(err))
-			}
-		}
-	}()
+	// Keep alive user stream every 15m (Binance recommends 30m but we use 15m for safety)
+	go bc.keepUserStreamAlive()
 
-	// Log WS status periodically
-	go func() {
-		ticker := time.NewTicker(60 * time.Second)
-		defer ticker.Stop()
-		for range ticker.C {
-			utils.Logger.Info("WebSocket connections active", zap.String("symbol", bc.cfg.Symbol))
-		}
-	}()
-
-	_ = doneC
+	// Monitor connection and reconnect if needed
+	go bc.monitorUserStream(doneC)
 
 	return nil
+}
+
+func (bc *BinanceClient) keepUserStreamAlive() {
+	ticker := time.NewTicker(15 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-bc.userStreamStopCh:
+			utils.Logger.Info("keepUserStreamAlive: stopping")
+			return
+		case <-ticker.C:
+			bc.userStreamMu.Lock()
+			listenKey := bc.listenKey
+			bc.userStreamMu.Unlock()
+
+			if listenKey == "" {
+				continue
+			}
+
+			if err := bc.client.NewKeepaliveUserStreamService().ListenKey(listenKey).Do(context.Background()); err != nil {
+				utils.Logger.Error("Failed to keepalive user stream", zap.Error(err))
+			} else {
+				utils.Logger.Debug("User stream keepalive successful")
+			}
+		}
+	}
+}
+
+func (bc *BinanceClient) monitorUserStream(doneC <-chan struct{}) {
+	defer close(bc.userStreamDoneCh)
+
+	select {
+	case <-doneC:
+		utils.Logger.Warn("User data stream disconnected, attempting reconnect...")
+	case <-bc.userStreamStopCh:
+		utils.Logger.Info("monitorUserStream: stopping")
+		return
+	}
+
+	// Wait a bit before reconnecting
+	time.Sleep(5 * time.Second)
+
+	// Reconnect
+	bc.userStreamMu.Lock()
+	stopCh := bc.userStreamStopCh
+	bc.userStreamMu.Unlock()
+
+	select {
+	case <-stopCh:
+		return
+	default:
+		utils.Logger.Info("Reconnecting to user stream...")
+		if err := bc.StartUserStream(); err != nil {
+			utils.Logger.Error("Failed to reconnect user stream", zap.Error(err))
+		} else {
+			utils.Logger.Info("Successfully reconnected to user stream")
+		}
+	}
+}
+
+func (bc *BinanceClient) StopUserStream() {
+	bc.userStreamMu.Lock()
+	defer bc.userStreamMu.Unlock()
+
+	if bc.userStreamStopCh != nil {
+		close(bc.userStreamStopCh)
+		bc.userStreamStopCh = nil
+	}
+	utils.Logger.Info("User stream stopped")
 }
 
 func (bc *BinanceClient) GetPosition() (*futures.AccountPosition, error) {

@@ -66,7 +66,9 @@ func main() {
 	<-sigChan
 
 	utils.Logger.Info("Shutting down...")
-	
+
+	ex.StopUserStream()
+
 	// Graceful shutdown logic (e.g. CancelAllOrders if needed)
 	if err := ex.CancelAllOrders(); err != nil {
 		utils.Logger.Error("Failed to cancel orders on shutdown", zap.Error(err))
