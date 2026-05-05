@@ -230,7 +230,7 @@ func (s *MartingaleStrategy) handleTick(ctx context.Context, event core.Event) e
 		return fmt.Errorf("invalid tick data")
 	}
 
-	utils.Logger.Info("Tick received", zap.Float64("price", price), zap.String("state", string(s.currentState)))
+	utils.Logger.Info("Tick received", zap.Float64("price", price), zap.String("state", string(s.currentState)), zap.Bool("gridPlaced", s.gridPlaced))
 
 	// 原子状态检查
 	s.mu.Lock()
@@ -238,6 +238,7 @@ func (s *MartingaleStrategy) handleTick(ctx context.Context, event core.Event) e
 		s.mu.Unlock()
 		return nil
 	}
+	utils.Logger.Info("State is IDLE, starting new entry sequence")
 	s.currentState = StatePlacingGrid
 	s.gridPlaced = false // 重置网格标志
 
@@ -369,14 +370,14 @@ func (s *MartingaleStrategy) handleOrderUpdate(ctx context.Context, event core.E
 			)
 
 			s.mu.Lock()
-			s.currentState = StateIdle
-			s.currentTPOrderID = 0
-			s.gridPlaced = false // 重置网格标志，准备下一轮
-			s.mu.Unlock()
+	s.currentState = StateIdle
+	s.currentTPOrderID = 0
+	s.gridPlaced = false // 重置网格标志，准备下一轮
+	utils.Logger.Info("Sell filled: state reset to IDLE", zap.Bool("gridPlaced", s.gridPlaced))
+	s.mu.Unlock()
 
-			s.exchange.CancelAllOrders()
-			// Wait a bit before next cycle
-			time.Sleep(10 * time.Second)
+	s.exchange.CancelAllOrders()
+	utils.Logger.Info("All orders cancelled after sell filled")
 		}
 	}
 	return nil
