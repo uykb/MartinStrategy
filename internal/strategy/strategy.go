@@ -53,6 +53,9 @@ type MartingaleStrategy struct {
 	gridMu sync.Mutex // placeGridOrders 防并发
 	tpMu   sync.Mutex // updateTP 防并发
 
+	// waitForFillAndPlaceGrid stops when this channel is closed
+	waitStopCh chan struct{}
+
 	// 监控计数器
 	gridSkipCount int64 // placeGridOrders 跳过次数
 	tpSkipCount   int64 // updateTP 跳过次数
@@ -69,6 +72,7 @@ func NewMartingaleStrategy(cfg *config.StrategyConfig, ex *exchange.BinanceClien
 		bus:          bus,
 		currentState: StateIdle,
 		activeOrders: make(map[int64]*futures.Order),
+		waitStopCh:   make(chan struct{}),
 	}
 }
 
@@ -232,6 +236,12 @@ func (s *MartingaleStrategy) handleTick(ctx context.Context, event core.Event) e
 	}
 	s.currentState = StatePlacingGrid
 	s.gridPlaced = false // 重置网格标志
+
+	// 关闭旧的 waitForFillAndPlaceGrid，启动新的
+	if s.waitStopCh != nil {
+		close(s.waitStopCh)
+	}
+	s.waitStopCh = make(chan struct{})
 	s.mu.Unlock()
 
 	// 网络请求在锁外执行
@@ -252,42 +262,50 @@ func (s *MartingaleStrategy) handleTick(ctx context.Context, event core.Event) e
 }
 
 func (s *MartingaleStrategy) waitForFillAndPlaceGrid() {
-	for i := 0; i < 15; i++ {
-		time.Sleep(2 * time.Second)
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
 
-		s.mu.RLock()
-		state := s.currentState
-		s.mu.RUnlock()
+	timeout := time.After(30 * time.Second)
 
-		// 如果状态已经不是 PLACING_GRID，说明已经不需要了
-		if state != StatePlacingGrid {
-			utils.Logger.Info("waitForFillAndPlaceGrid: state changed, aborting",
-				zap.String("state", string(state)))
+	for {
+		select {
+		case <-s.waitStopCh:
+			utils.Logger.Info("waitForFillAndPlaceGrid: stopped via channel")
 			return
-		}
-
-		// 检查持仓
-		pos, err := s.exchange.GetPosition()
-		if err != nil {
-			utils.Logger.Error("Failed to get position", zap.Error(err))
-			continue
-		}
-
-		amt, _ := strconv.ParseFloat(pos.PositionAmt, 64)
-		if math.Abs(amt) > 0 {
-			entryPrice, _ := strconv.ParseFloat(pos.EntryPrice, 64)
-			utils.Logger.Info("Position detected, placing grid orders",
-				zap.Float64("amt", amt),
-				zap.Float64("entryPrice", entryPrice))
-			s.placeGridOrders(entryPrice)
+		case <-timeout:
+			utils.Logger.Warn("waitForFillAndPlaceGrid: timeout, no position found")
+			s.mu.Lock()
+			s.currentState = StateIdle
+			s.mu.Unlock()
 			return
+		case <-ticker.C:
+			s.mu.RLock()
+			state := s.currentState
+			s.mu.RUnlock()
+
+			if state != StatePlacingGrid {
+				utils.Logger.Info("waitForFillAndPlaceGrid: state changed, aborting",
+					zap.String("state", string(state)))
+				return
+			}
+
+			pos, err := s.exchange.GetPosition()
+			if err != nil {
+				utils.Logger.Error("Failed to get position", zap.Error(err))
+				continue
+			}
+
+			amt, _ := strconv.ParseFloat(pos.PositionAmt, 64)
+			if math.Abs(amt) > 0 {
+				entryPrice, _ := strconv.ParseFloat(pos.EntryPrice, 64)
+				utils.Logger.Info("Position detected, placing grid orders",
+					zap.Float64("amt", amt),
+					zap.Float64("entryPrice", entryPrice))
+				s.placeGridOrders(entryPrice)
+				return
+			}
 		}
 	}
-
-	utils.Logger.Warn("waitForFillAndPlaceGrid: timeout, no position found")
-	s.mu.Lock()
-	s.currentState = StateIdle
-	s.mu.Unlock()
 }
 
 func (s *MartingaleStrategy) handleOrderUpdate(ctx context.Context, event core.Event) error {
