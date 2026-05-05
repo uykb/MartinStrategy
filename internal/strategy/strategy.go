@@ -243,19 +243,17 @@ func (s *MartingaleStrategy) handleTick(ctx context.Context, event core.Event) e
 }
 
 func (s *MartingaleStrategy) handleOrderUpdate(ctx context.Context, event core.Event) error {
-	// The event data from binance.go is *futures.WsOrderTradeUpdate
-	// Let's assert it correctly
 	order, ok := event.Data.(*futures.WsOrderTradeUpdate)
 	if !ok {
-		// Try value type if pointer assertion fails, though binance.go sends pointer
-		// Or maybe it's wrapped in something else?
-		// Let's debug what we got
+		utils.Logger.Error("Invalid order update data",
+			zap.String("type", fmt.Sprintf("%T", event.Data)))
 		return fmt.Errorf("invalid order update data: expected *futures.WsOrderTradeUpdate, got %T", event.Data)
 	}
 
 	utils.Logger.Info("Order Update Received",
 		zap.Int64("id", order.ID),
 		zap.String("status", string(order.Status)),
+		zap.String("side", string(order.Side)),
 		zap.String("type", string(order.Type)),
 	)
 
@@ -337,6 +335,8 @@ func (s *MartingaleStrategy) enterLong(currentPrice float64) error {
 }
 
 func (s *MartingaleStrategy) placeGridOrders(execPrice float64) {
+	utils.Logger.Info("placeGridOrders started", zap.Float64("execPrice", execPrice))
+
 	// 防并发：如果已有实例在执行则跳过
 	if !s.gridMu.TryLock() {
 		s.mu.Lock()
@@ -349,9 +349,7 @@ func (s *MartingaleStrategy) placeGridOrders(execPrice float64) {
 	}
 	defer s.gridMu.Unlock()
 
-	// This should be async or robust
-	// 1. Calculate Grid Levels based on ATR
-	// 2. Batch Place Orders
+	utils.Logger.Info("placeGridOrders acquired lock")
 
 	var entryPrice float64
 
@@ -493,6 +491,8 @@ func (s *MartingaleStrategy) placeGridOrders(execPrice float64) {
 }
 
 func (s *MartingaleStrategy) updateTP() {
+	utils.Logger.Info("updateTP started")
+
 	// 防并发：如果已有实例在执行则跳过
 	if !s.tpMu.TryLock() {
 		s.mu.Lock()
@@ -504,6 +504,8 @@ func (s *MartingaleStrategy) updateTP() {
 		return
 	}
 	defer s.tpMu.Unlock()
+
+	utils.Logger.Info("updateTP acquired lock")
 
 	// 1. Get updated position
 	pos, err := s.exchange.GetPosition()
@@ -577,11 +579,13 @@ func (s *MartingaleStrategy) updateTP() {
 }
 
 func (s *MartingaleStrategy) fetchATR(interval string) float64 {
+	utils.Logger.Info("fetchATR called", zap.String("interval", interval))
 	klines, err := s.exchange.GetKlines(interval, 50)
 	if err != nil {
 		utils.Logger.Error("Failed to get klines", zap.String("interval", interval), zap.Error(err))
 		return 0
 	}
+	utils.Logger.Info("fetchATR got klines", zap.String("interval", interval), zap.Int("count", len(klines)))
 
 	var highs, lows, closes []float64
 	for _, k := range klines {
