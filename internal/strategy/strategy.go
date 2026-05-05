@@ -88,6 +88,45 @@ func (s *MartingaleStrategy) Start() {
 
 	// Initial state sync
 	s.syncState()
+
+	// Background goroutine to check position status periodically
+	// This handles cases where position is closed manually (e.g., via Binance UI)
+	go s.monitorPositionStatus()
+}
+
+func (s *MartingaleStrategy) monitorPositionStatus() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		s.mu.RLock()
+		state := s.currentState
+		s.mu.RUnlock()
+
+		// Only check when in IN_POSITION state
+		if state != StateInPosition {
+			continue
+		}
+
+		pos, err := s.exchange.GetPosition()
+		if err != nil {
+			utils.Logger.Error("monitorPositionStatus: failed to get position", zap.Error(err))
+			continue
+		}
+
+		amt, _ := strconv.ParseFloat(pos.PositionAmt, 64)
+		if math.Abs(amt) == 0 {
+			utils.Logger.Info("monitorPositionStatus: position closed (manually?), resetting state to IDLE")
+			s.mu.Lock()
+			s.currentState = StateIdle
+			s.gridPlaced = false
+			s.currentTPOrderID = 0
+			s.mu.Unlock()
+
+			// Cancel any remaining orders
+			s.exchange.CancelAllOrders()
+		}
+	}
 }
 
 func (s *MartingaleStrategy) initSymbolInfo() error {
