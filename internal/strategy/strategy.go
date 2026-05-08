@@ -360,6 +360,15 @@ func (s *MartingaleStrategy) handleOrderUpdate(ctx context.Context, event core.E
 		return fmt.Errorf("invalid order update data: expected *futures.WsOrderTradeUpdate, got %T", event.Data)
 	}
 
+	// 只处理配置的交易对订单
+	configuredSymbol := s.exchange.GetSymbol()
+	if order.Symbol != configuredSymbol {
+		utils.Logger.Debug("Ignoring order update for different symbol",
+			zap.String("order_symbol", order.Symbol),
+			zap.String("configured_symbol", configuredSymbol))
+		return nil
+	}
+
 	utils.Logger.Info("Order Update Received",
 		zap.Int64("id", order.ID),
 		zap.String("status", string(order.Status)),
