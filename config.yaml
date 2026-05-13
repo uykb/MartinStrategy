@@ -15,4 +15,4 @@ storage:
   redis_db: 0
 
 log:
-  level: "info"
+  level: "debug"
