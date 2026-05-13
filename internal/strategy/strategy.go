@@ -28,7 +28,7 @@ const (
 )
 
 // MinNotional is the minimum order value in USDT for Binance Futures
-const MinNotional = 50.0
+const MinNotional = 40.0
 
 type MartingaleStrategy struct {
 	cfg      *config.StrategyConfig
