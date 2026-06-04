@@ -27,8 +27,8 @@ const (
 	StateClosing     State = "CLOSING"
 )
 
-// MinNotional is the minimum order value in USDT for Binance Futures
-const MinNotional = 50.0
+// MinOrderValue is the minimum order value in USDT for Binance Futures
+const MinOrderValue = 6.0
 
 type MartingaleStrategy struct {
 	cfg      *config.StrategyConfig
@@ -439,7 +439,8 @@ func (s *MartingaleStrategy) enterLong(currentPrice float64) error {
 	// Calculate Base Quantity
 	// Logic: Unit = MinNotional (5 USDT) / Price -> rounded UP to stepSize
 	// Base Order = 1 * Unit (1倍)
-	unitQtyRaw := MinNotional / currentPrice
+	minNotional := s.calcMinNotional()
+	unitQtyRaw := minNotional / currentPrice
 	unitQty := utils.RoundUpToTickSize(unitQtyRaw, s.stepSize)
 
 	if unitQty < s.minQty {
@@ -579,9 +580,9 @@ func (s *MartingaleStrategy) placeGridOrders(execPrice float64) {
 		atr1d = entryPrice * 0.01
 	}
 
-	// Calculate Unit Quantity (Fibonacci 1) based on MinNotional logic
-	// We need to know what "1 unit" is. It is the base order size (5U).
-	unitQty := utils.RoundUpToTickSize(MinNotional/entryPrice, s.stepSize)
+	minNotional := s.calcMinNotional()
+
+	unitQty := utils.RoundUpToTickSize(minNotional/entryPrice, s.stepSize)
 
 	utils.Logger.Info("Placing Grid Orders", zap.Float64("Entry", entryPrice), zap.Float64("ATR30m", atr30m), zap.Float64("UnitQty", unitQty))
 
@@ -592,7 +593,7 @@ func (s *MartingaleStrategy) placeGridOrders(execPrice float64) {
 		atr30m,       // 1
 		atr1h,        // 2
 		atr30m + atr1h, // 3
-		atr2h,        // 4
+		atr30m + atr2h, // 4
 		atr4h,        // 5
 		atr6h,        // 6
 		atr8h,        // 7
@@ -626,13 +627,13 @@ func (s *MartingaleStrategy) placeGridOrders(execPrice float64) {
 		// Ensure MinNotional (5 USDT) at the LIMIT PRICE
 		// If Qty * Price < 5.0, Binance will reject.
 		// Since Price < EntryPrice, the original UnitQty (based on EntryPrice) might be insufficient.
-		if qty*price < MinNotional {
+		if qty*price < minNotional {
 			utils.Logger.Info("Adjusting Qty to meet MinNotional",
 				zap.Int("index", i),
 				zap.Float64("old_qty", qty),
 				zap.Float64("price", price),
 			)
-			qty = MinNotional / price
+			qty = minNotional / price
 		}
 
 		// Round qty to stepSize
@@ -773,6 +774,20 @@ func (s *MartingaleStrategy) fetchATR(interval string) float64 {
 	}
 
 	return utils.CalculateATR(highs, lows, closes, s.cfg.AtrPeriod)
+}
+
+func (s *MartingaleStrategy) calcMinNotional() float64 {
+	balance, err := s.exchange.GetBalance()
+	if err != nil {
+		utils.Logger.Error("Failed to get balance, using MinOrderValue", zap.Error(err))
+		return MinOrderValue
+	}
+	notional := balance * s.cfg.BaseRatio
+	if notional < MinOrderValue {
+		notional = MinOrderValue
+	}
+	utils.Logger.Info("Dynamic MinNotional", zap.Float64("balance", balance), zap.Float64("ratio", s.cfg.BaseRatio), zap.Float64("notional", notional))
+	return notional
 }
 
 func (s *MartingaleStrategy) getFibonacci(n int) int {

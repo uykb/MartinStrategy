@@ -7,6 +7,7 @@ exchange:
 strategy:
   max_safety_orders: 9
   atr_period: 14
+  base_ratio: 0.08
 
 storage:
   sqlite_path: "bot.db"
@@ -15,4 +16,4 @@ storage:
   redis_db: 0
 
 log:
-  level: "debug"
+  level: "info"

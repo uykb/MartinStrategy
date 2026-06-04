@@ -21,8 +21,9 @@ type ExchangeConfig struct {
 }
 
 type StrategyConfig struct {
-	MaxSafetyOrders int `mapstructure:"max_safety_orders"`
-	AtrPeriod       int `mapstructure:"atr_period"`
+	MaxSafetyOrders int     `mapstructure:"max_safety_orders"`
+	AtrPeriod       int     `mapstructure:"atr_period"`
+	BaseRatio       float64 `mapstructure:"base_ratio"`
 }
 
 type StorageConfig struct {

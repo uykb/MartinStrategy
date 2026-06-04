@@ -122,9 +122,42 @@ if err := doNetworkCall(); err != nil {
 | `internal/utils` | Indicators (ATR), rounding, Zap logger |
 
 ## Key Constants
-- `MinNotional = 50.0` - Minimum USDT order value for Binance Futures
+- `MinOrderValue = 6.0` - Minimum USDT order value for Binance Futures (动态头仓下限)
 - Event queue buffer: 1000
 - Grid levels: 9 max (Fibonacci scaled)
+- Price polling interval: 10s
+- Position monitor interval: 5s
+- Grid order API rate limit: 200ms between orders
+- User stream keepalive: 15m (Binance requires within 60m)
+- Server time sync: every 5m
+- WebSocket reconnect: up to 5 retries with exponential backoff
+
+## Key Config Parameters
+- `base_ratio: 0.08` - 头仓金额 = 账户 USDT 余额 × base_ratio（动态计算，每次开仓前实时查询）
+- `max_safety_orders: 9` - 最大网格层数
+- `atr_period: 14` - ATR 计算周期
+
+## Dynamic Notional Calculation
+
+头仓金额通过 `calcMinNotional()` 动态计算：
+
+```go
+func (s *MartingaleStrategy) calcMinNotional() float64 {
+    balance, err := s.exchange.GetBalance()  // REST API 查询 USDT 余额
+    if err != nil {
+        return MinOrderValue  // 降级到 6.0 USDT
+    }
+    notional := balance * s.cfg.BaseRatio  // 余额 × 比例
+    if notional < MinOrderValue {
+        notional = MinOrderValue  // 不低于 Binance 最低限制
+    }
+    return notional
+}
+```
+
+- 调用时机：`enterLong()` 和 `placeGridOrders()` 各调用一次，同一轮下单内缓存结果
+- `enterLong` 中计算 `unitQty = calcMinNotional() / currentPrice`
+- `placeGridOrders` 中计算 `unitQty = calcMinNotional() / entryPrice`，循环内复用该值
 
 ## Adding Features
 
@@ -137,6 +170,11 @@ if err := doNetworkCall(); err != nil {
 1. Define in `internal/strategy/strategy.go` as `const StateName State = "NAME"`
 2. Add transition logic in appropriate handler
 3. Update state machine comments
+
+### New REST API Method
+1. Add method to `BinanceClient` in `internal/exchange/binance.go`
+2. Use `bc.client.NewXxxService().Do(context.Background())` pattern
+3. Wrap errors with context
 
 ## Testing
 - No tests exist yet; create `_test.go` files alongside source

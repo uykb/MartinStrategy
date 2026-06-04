@@ -235,6 +235,20 @@ func (bc *BinanceClient) GetPosition() (*futures.AccountPosition, error) {
 	return nil, fmt.Errorf("position not found for %s", bc.cfg.Symbol)
 }
 
+func (bc *BinanceClient) GetBalance() (float64, error) {
+	acc, err := bc.client.NewGetAccountService().Do(context.Background())
+	if err != nil {
+		return 0, fmt.Errorf("failed to get account: %w", err)
+	}
+	for _, b := range acc.Assets {
+		if b.Asset == "USDT" {
+			balance, _ := strconv.ParseFloat(b.WalletBalance, 64)
+			return balance, nil
+		}
+	}
+	return 0, fmt.Errorf("USDT balance not found")
+}
+
 func (bc *BinanceClient) GetSymbol() string {
 	return bc.cfg.Symbol
 }
