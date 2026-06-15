@@ -124,7 +124,7 @@ if err := doNetworkCall(); err != nil {
 ## Key Constants
 - `MinOrderValue = 6.0` - Minimum USDT order value for Binance Futures (动态头仓下限)
 - Event queue buffer: 1000
-- Grid levels: 7 max (Fibonacci scaled)
+- Grid levels: 7 max (1h/2h/4h/8h/12h/1d/1w, Fibonacci scaled)
 - Price polling interval: 10s
 - Position monitor interval: 5s
 - Grid order API rate limit: 200ms between orders
