@@ -545,19 +545,16 @@ func (s *MartingaleStrategy) placeGridOrders(execPrice float64) {
 	}
 
 	// Pre-calculate ATRs for different timeframes
-	atr30m := s.fetchATR("30m")
+	// 7 levels: 1h, 2h, 4h, 12h, 1d, 1w, 1M
 	atr1h := s.fetchATR("1h")
 	atr2h := s.fetchATR("2h")
 	atr4h := s.fetchATR("4h")
-	atr6h := s.fetchATR("6h")
-	atr8h := s.fetchATR("8h")
 	atr12h := s.fetchATR("12h")
 	atr1d := s.fetchATR("1d")
+	atr1w := s.fetchATR("1w")
+	atr1M := s.fetchATR("1M")
 
 	// If any ATR failed (0), fallback to entryPrice * 0.01
-	if atr30m == 0 {
-		atr30m = entryPrice * 0.01
-	}
 	if atr1h == 0 {
 		atr1h = entryPrice * 0.01
 	}
@@ -567,38 +564,36 @@ func (s *MartingaleStrategy) placeGridOrders(execPrice float64) {
 	if atr4h == 0 {
 		atr4h = entryPrice * 0.01
 	}
-	if atr6h == 0 {
-		atr6h = entryPrice * 0.01
-	}
-	if atr8h == 0 {
-		atr8h = entryPrice * 0.01
-	}
 	if atr12h == 0 {
 		atr12h = entryPrice * 0.01
 	}
 	if atr1d == 0 {
 		atr1d = entryPrice * 0.01
 	}
+	if atr1w == 0 {
+		atr1w = entryPrice * 0.01
+	}
+	if atr1M == 0 {
+		atr1M = entryPrice * 0.01
+	}
 
 	minNotional := s.calcMinNotional()
 
 	unitQty := utils.RoundUpToTickSize(minNotional/entryPrice, s.stepSize)
 
-	utils.Logger.Info("Placing Grid Orders", zap.Float64("Entry", entryPrice), zap.Float64("ATR30m", atr30m), zap.Float64("UnitQty", unitQty))
+	utils.Logger.Info("Placing Grid Orders", zap.Float64("Entry", entryPrice), zap.Float64("ATR1h", atr1h), zap.Float64("UnitQty", unitQty))
 
-	// Define Multiplier Sequence (Piecewise Function)
-	// 1: 30m, 2: 1h, 3: 30m+1h, 4: 2h, 5: 4h, 6: 6h, 7: 8h, 8: 12h, 9: 1D
+	// Define Grid Distances (7 Levels)
+	// 1: 1h, 2: 2h, 3: 4h, 4: 12h, 5: 1D, 6: 1W, 7: 1M
 	// Distances are relative to previous order
 	gridDistances := []float64{
-		atr30m,       // 1
-		atr1h,        // 2
-		atr30m + atr1h, // 3
-		atr30m + atr2h, // 4
-		atr4h,        // 5
-		atr6h,        // 6
-		atr8h,        // 7
-		atr12h,       // 8
-		atr1d,        // 9
+		atr1h,   // 1: 1小时
+		atr2h,   // 2: 2小时
+		atr4h,   // 3: 4小时
+		atr12h,  // 4: 12小时
+		atr1d,   // 5: 日线
+		atr1w,   // 6: 周线
+		atr1M,   // 7: 月线
 	}
 
 	currentPriceLevel := entryPrice
@@ -707,7 +702,7 @@ func (s *MartingaleStrategy) updateTP() {
 		s.mu.RUnlock()
 		return
 	}
-	// Always use 30m ATR for TP as requested
+	// Use 30m ATR for TP
 	atr30m := s.fetchATR("30m")
 	if atr30m == 0 {
 		atr30m = avgPrice * 0.01
