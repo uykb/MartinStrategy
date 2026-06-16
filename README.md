@@ -130,7 +130,7 @@ exchange:
 strategy:
   max_safety_orders: 8     # 最大加仓层数 (Fibonacci)
   atr_period: 14           # ATR 周期
-  base_ratio: 1          # 头仓占总资产比例（动态计算）
+  base_ratio: 0.1          # 头仓占总资产比例（动态计算）
 
 storage:
   sqlite_path: "bot.db"    # SQLite 数据库路径
@@ -152,7 +152,7 @@ export MARTIN_EXCHANGE_API_SECRET="your_api_secret"
 export MARTIN_EXCHANGE_SYMBOL="BTCUSDT"
 export MARTIN_EXCHANGE_USE_TESTNET="true"
 export MARTIN_STRATEGY_MAX_SAFETY_ORDERS="8"
-export MARTIN_STRATEGY_BASE_RATIO="1"
+export MARTIN_STRATEGY_BASE_RATIO="0.1"
 export MARTIN_LOG_LEVEL="debug"
 ```
 
