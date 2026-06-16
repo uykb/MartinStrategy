@@ -7,8 +7,8 @@
 - **事件驱动架构**: 基于 EventBus 的异步消息处理，解耦数据源与策略逻辑
 - **有限状态机**: 清晰的状态流转（IDLE → PLACING_GRID → IN_POSITION），避免逻辑混乱
 - **动态头仓**: 头仓金额根据账户总资产与配置比例（base_ratio）动态计算，随盈利自动放大
-- **多时间框架 ATR**: 网格间距采用 1h/2h/4h/8h/12h/1d/1w 七级时间框架 ATR 动态计算
-- **Fibonacci 加仓**: 安全订单数量按 Fibonacci 序列（1,2,3,5,8,13,21）递增
+- **多时间框架 ATR**: 网格间距采用 30m/1h/2h/4h/8h/12h/1d/1w 八级时间框架 ATR 动态计算
+- **Fibonacci 加仓**: 安全订单数量按 Fibonacci 序列（1,1,2,3,5,8,13,21）递增
 - **并发安全**: TryLock 防重入锁 + 状态标志双重保护，防止重复下单
 - **状态恢复**: 启动时自动同步交易所持仓与挂单状态，支持意外重启恢复
 - **自动重连**: WebSocket 断线指数退避重连，定时时间同步与心跳保活
@@ -128,7 +128,7 @@ exchange:
   use_testnet: false       # 是否使用测试网
 
 strategy:
-  max_safety_orders: 7     # 最大加仓层数 (Fibonacci)
+  max_safety_orders: 8     # 最大加仓层数 (Fibonacci)
   atr_period: 14           # ATR 周期
   base_ratio: 0.08         # 头仓占总资产比例（动态计算）
 
@@ -151,7 +151,7 @@ export MARTIN_EXCHANGE_API_KEY="your_api_key"
 export MARTIN_EXCHANGE_API_SECRET="your_api_secret"
 export MARTIN_EXCHANGE_SYMBOL="BTCUSDT"
 export MARTIN_EXCHANGE_USE_TESTNET="true"
-export MARTIN_STRATEGY_MAX_SAFETY_ORDERS="7"
+export MARTIN_STRATEGY_MAX_SAFETY_ORDERS="8"
 export MARTIN_STRATEGY_BASE_RATIO="0.08"
 export MARTIN_LOG_LEVEL="debug"
 ```
@@ -197,17 +197,18 @@ export MARTIN_LOG_LEVEL="debug"
 
 ### 网格间距设计
 
-网格采用**七级时间框架 ATR**设计，每层直接使用对应周期的 ATR 值作为间距：
+网格采用**八级时间框架 ATR**设计，每层直接使用对应周期的 ATR 值作为间距：
 
 | 层级 | 间距计算 | 时间框架 | 说明 |
 |------|----------|----------|------|
-| 1 | ATR(1h) | 1 小时 | 首层保护 |
-| 2 | ATR(2h) | 2 小时 | 第二层保护 |
-| 3 | ATR(4h) | 4 小时 | 中短期保护 |
-| 4 | ATR(8h) | 8 小时 | 中期保护 |
-| 5 | ATR(12h) | 12 小时 | 中长期保护 |
-| 6 | ATR(1d) | 日线 | 长期保护 |
-| 7 | ATR(1w) | 周线 | 最深层保护 |
+| 1 | ATR(30m) | 30 分钟 | 首层保护 |
+| 2 | ATR(1h) | 1 小时 | 第二层保护 |
+| 3 | ATR(2h) | 2 小时 | 中短期保护 |
+| 4 | ATR(4h) | 4 小时 | 中期保护 |
+| 5 | ATR(8h) | 8 小时 | 中长期保护 |
+| 6 | ATR(12h) | 12 小时 | 长期保护 |
+| 7 | ATR(1d) | 日线 | 长期保护 |
+| 8 | ATR(1w) | 周线 | 最深层保护 |
 
 > 间距为**相对上一层**的距离，非绝对距离。ATR 获取失败时回退至入场价 × 1%。
 
@@ -216,12 +217,13 @@ export MARTIN_LOG_LEVEL="debug"
 | 层级 | Fibonacci 倍数 | 数量（假设 unit=1） | 累计倍数 |
 |------|----------------|---------------------|----------|
 | 1 | 1 | 1 | 1 |
-| 2 | 2 | 2 | 3 |
-| 3 | 3 | 3 | 6 |
-| 4 | 5 | 5 | 11 |
-| 5 | 8 | 8 | 19 |
-| 6 | 13 | 13 | 32 |
-| 7 | 21 | 21 | 53 |
+| 2 | 1 | 1 | 2 |
+| 3 | 2 | 2 | 4 |
+| 4 | 3 | 3 | 7 |
+| 5 | 5 | 5 | 12 |
+| 6 | 8 | 8 | 20 |
+| 7 | 13 | 13 | 33 |
+| 8 | 21 | 21 | 54 |
 
 > 每层数量 = unitQty × Fibonacci(n)，unitQty 由动态头仓金额（余额 × base_ratio）/ 入场价计算并向上取整至 stepSize。
 
@@ -327,7 +329,7 @@ go s.placeGridOrders(execPrice)
 | 组件 | 说明 |
 |------|------|
 | 动态头仓 | `余额 × base_ratio`，不低于 MinOrderValue (6.0 USDT) |
-| 网格层级 | 最多 7 层（可配置） |
+| 网格层级 | 最多 8 层（可配置） |
 | 仓位监控 | 每 5 秒检查一次（检测手动平仓） |
 | 状态同步 | 启动时自动恢复持仓与挂单状态 |
 | API 限频保护 | 网格下单间隔 200ms |
@@ -359,7 +361,7 @@ go s.placeGridOrders(execPrice)
 | `notional` | 动态计算的头仓金额 |
 | `skip_count` | 因并发冲突跳过的次数 |
 | `entryPrice` | 入场价格 |
-| `ATR1h` | 1 小时 ATR 值 |
+| `ATR30m` | 30 分钟 ATR 值 |
 | `UnitQty` | 单位数量 |
 | `state` | 当前状态机状态 |
 | `gridPlaced` | 网格是否已放置标志 |

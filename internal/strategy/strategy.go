@@ -545,7 +545,8 @@ func (s *MartingaleStrategy) placeGridOrders(execPrice float64) {
 	}
 
 	// Pre-calculate ATRs for different timeframes
-	// 7 levels: 1h, 2h, 4h, 8h, 12h, 1d, 1w
+	// 8 levels: 30m, 1h, 2h, 4h, 8h, 12h, 1d, 1w
+	atr30m := s.fetchATR("30m")
 	atr1h := s.fetchATR("1h")
 	atr2h := s.fetchATR("2h")
 	atr4h := s.fetchATR("4h")
@@ -555,6 +556,9 @@ func (s *MartingaleStrategy) placeGridOrders(execPrice float64) {
 	atr1w := s.fetchATR("1w")
 
 	// If any ATR failed (0), fallback to entryPrice * 0.01
+	if atr30m == 0 {
+		atr30m = entryPrice * 0.01
+	}
 	if atr1h == 0 {
 		atr1h = entryPrice * 0.01
 	}
@@ -581,19 +585,20 @@ func (s *MartingaleStrategy) placeGridOrders(execPrice float64) {
 
 	unitQty := utils.RoundUpToTickSize(minNotional/entryPrice, s.stepSize)
 
-	utils.Logger.Info("Placing Grid Orders", zap.Float64("Entry", entryPrice), zap.Float64("ATR1h", atr1h), zap.Float64("UnitQty", unitQty))
+	utils.Logger.Info("Placing Grid Orders", zap.Float64("Entry", entryPrice), zap.Float64("ATR30m", atr30m), zap.Float64("UnitQty", unitQty))
 
-	// Define Grid Distances (7 Levels)
-	// 1: 1h, 2: 2h, 3: 4h, 4: 8h, 5: 12h, 6: 1D, 7: 1W
+	// Define Grid Distances (8 Levels)
+	// 1: 30m, 2: 1h, 3: 2h, 4: 4h, 5: 8h, 6: 12h, 7: 1D, 8: 1W
 	// Distances are relative to previous order
 	gridDistances := []float64{
-		atr1h,   // 1: 1小时
-		atr2h,   // 2: 2小时
-		atr4h,   // 3: 4小时
-		atr8h,   // 4: 8小时
-		atr12h,  // 5: 12小时
-		atr1d,   // 6: 日线
-		atr1w,   // 7: 周线
+		atr30m,  // 1: 30分钟
+		atr1h,   // 2: 1小时
+		atr2h,   // 3: 2小时
+		atr4h,   // 4: 4小时
+		atr8h,   // 5: 8小时
+		atr12h,  // 6: 12小时
+		atr1d,   // 7: 日线
+		atr1w,   // 8: 周线
 	}
 
 	currentPriceLevel := entryPrice
@@ -792,11 +797,8 @@ func (s *MartingaleStrategy) getFibonacci(n int) int {
 	if n == 1 {
 		return 1
 	}
-	if n == 2 {
-		return 2
-	}
-	a, b := 1, 2
-	for i := 3; i <= n; i++ {
+	a, b := 1, 1
+	for i := 2; i <= n; i++ {
 		a, b = b, a+b
 	}
 	return b

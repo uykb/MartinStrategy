@@ -124,7 +124,7 @@ if err := doNetworkCall(); err != nil {
 ## Key Constants
 - `MinOrderValue = 6.0` - Minimum USDT order value for Binance Futures (动态头仓下限)
 - Event queue buffer: 1000
-- Grid levels: 7 max (1h/2h/4h/8h/12h/1d/1w, Fibonacci scaled)
+- Grid levels: 8 max (30m/1h/2h/4h/8h/12h/1d/1w, Fibonacci scaled)
 - Price polling interval: 10s
 - Position monitor interval: 5s
 - Grid order API rate limit: 200ms between orders
@@ -134,7 +134,7 @@ if err := doNetworkCall(); err != nil {
 
 ## Key Config Parameters
 - `base_ratio: 0.08` - 头仓金额 = 账户 USDT 余额 × base_ratio（动态计算，每次开仓前实时查询）
-- `max_safety_orders: 7` - 最大网格层数
+- `max_safety_orders: 8` - 最大网格层数
 - `atr_period: 14` - ATR 计算周期
 
 ## Dynamic Notional Calculation
