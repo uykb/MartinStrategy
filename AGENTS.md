@@ -134,7 +134,7 @@ if err := doNetworkCall(); err != nil {
 - WebSocket reconnect: up to 5 retries with exponential backoff
 
 ## Key Config Parameters
-- `base_ratio: 0.08` - 头仓金额 = 账户 USDT 余额 × base_ratio（动态计算，每次开仓前实时查询）
+- `base_ratio: 1` - 头仓金额 = 账户 USDT 余额 × base_ratio（动态计算，每次开仓前实时查询）
 - `max_safety_orders: 8` - 最大网格层数
 - `atr_period: 14` - ATR 计算周期
 
