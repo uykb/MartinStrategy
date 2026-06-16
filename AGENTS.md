@@ -125,6 +125,7 @@ if err := doNetworkCall(); err != nil {
 - `MinOrderValue = 6.0` - Minimum USDT order value for Binance Futures (动态头仓下限)
 - Event queue buffer: 1000
 - Grid levels: 8 max (30m/1h/2h/4h/8h/12h/1d/1w, Fibonacci scaled)
+- Fibonacci sequence: 1, 1, 2, 3, 5, 8, 13, 21 (starting from 1,1)
 - Price polling interval: 10s
 - Position monitor interval: 5s
 - Grid order API rate limit: 200ms between orders
@@ -136,6 +137,46 @@ if err := doNetworkCall(); err != nil {
 - `base_ratio: 0.08` - 头仓金额 = 账户 USDT 余额 × base_ratio（动态计算，每次开仓前实时查询）
 - `max_safety_orders: 8` - 最大网格层数
 - `atr_period: 14` - ATR 计算周期
+
+## Grid Strategy Details
+
+### ATR Grid Distances (8 Levels)
+
+| Level | Timeframe | ATR Source | Description |
+|-------|-----------|------------|-------------|
+| 1 | 30m | `fetchATR("30m")` | 首层保护 |
+| 2 | 1h | `fetchATR("1h")` | 第二层保护 |
+| 3 | 2h | `fetchATR("2h")` | 中短期保护 |
+| 4 | 4h | `fetchATR("4h")` | 中期保护 |
+| 5 | 8h | `fetchATR("8h")` | 中长期保护 |
+| 6 | 12h | `fetchATR("12h")` | 长期保护 |
+| 7 | 1d | `fetchATR("1d")` | 长期保护 |
+| 8 | 1w | `fetchATR("1w")` | 最深层保护 |
+
+- Distances are **relative to previous order**, not absolute
+- ATR fetch failure fallback: `entryPrice * 0.01`
+- Beyond level 8, fallback to last defined distance (ATR(1w))
+
+### Fibonacci Quantity Scaling
+
+```go
+func getFibonacci(n int) int {
+    if n <= 0 { return 0 }
+    a, b := 1, 1
+    for i := 1; i < n; i++ {
+        a, b = b, a+b
+    }
+    return a
+}
+```
+
+Generates: 1, 1, 2, 3, 5, 8, 13, 21 for levels 1-8.
+
+### Take Profit (TP)
+
+- TP price: `avgPrice + ATR(30m)` (always uses 30-minute ATR)
+- TP quantity: full position close
+- Updated after each safety order fill
 
 ## Dynamic Notional Calculation
 
