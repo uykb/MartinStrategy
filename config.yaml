@@ -7,7 +7,7 @@ exchange:
 strategy:
   max_safety_orders: 8
   atr_period: 14
-  base_ratio: 0.1
+  base_ratio: 0.05
 
 storage:
   sqlite_path: "bot.db"
