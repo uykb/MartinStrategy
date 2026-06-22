@@ -12,7 +12,6 @@ import (
 	"github.com/uykb/MartinStrategy/internal/config"
 	"github.com/uykb/MartinStrategy/internal/core"
 	"github.com/uykb/MartinStrategy/internal/exchange"
-	"github.com/uykb/MartinStrategy/internal/storage"
 	"github.com/uykb/MartinStrategy/internal/utils"
 	"go.uber.org/zap"
 )
@@ -21,11 +20,15 @@ import (
 type State string
 
 const (
-	StateIdle        State = "IDLE"
-	StateInPosition  State = "IN_POSITION"
-	StatePlacingGrid State = "PLACING_GRID"
-	StateClosing     State = "CLOSING"
+	StateIdle         State = "IDLE"
+	StateWaitingEntry State = "WAITING_ENTRY" // 首仓挂单等待成交
+	StateInPosition   State = "IN_POSITION"
+	StatePlacingGrid  State = "PLACING_GRID"
+	StateClosing      State = "CLOSING"
 )
+
+// EntryTimeout 首仓挂单超时时间，超时后回退为市价单
+const EntryTimeout = 10 * time.Second
 
 // MinOrderValue is the minimum order value in USDT for Binance Futures
 const MinOrderValue = 6.0
@@ -33,7 +36,6 @@ const MinOrderValue = 6.0
 type MartingaleStrategy struct {
 	cfg      *config.StrategyConfig
 	exchange *exchange.BinanceClient
-	storage  *storage.Database
 	bus      *core.EventBus
 
 	mu               sync.RWMutex
@@ -41,6 +43,7 @@ type MartingaleStrategy struct {
 	position         *futures.AccountPosition
 	activeOrders     map[int64]*futures.Order // Local cache of active orders
 	currentTPOrderID int64
+	baseOrderID      int64 // 首仓挂单 ID，用于超时取消
 
 	// Symbol Info
 	quantityPrecision int
@@ -64,11 +67,10 @@ type MartingaleStrategy struct {
 	gridPlaced bool // 标志网格是否已放置，防止重复
 }
 
-func NewMartingaleStrategy(cfg *config.StrategyConfig, ex *exchange.BinanceClient, st *storage.Database, bus *core.EventBus) *MartingaleStrategy {
+func NewMartingaleStrategy(cfg *config.StrategyConfig, ex *exchange.BinanceClient, bus *core.EventBus) *MartingaleStrategy {
 	return &MartingaleStrategy{
 		cfg:          cfg,
 		exchange:     ex,
-		storage:      st,
 		bus:          bus,
 		currentState: StateIdle,
 		activeOrders: make(map[int64]*futures.Order),
@@ -278,7 +280,7 @@ func (s *MartingaleStrategy) handleTick(ctx context.Context, event core.Event) e
 		return nil
 	}
 	utils.Logger.Info("State is IDLE, starting new entry sequence")
-	s.currentState = StatePlacingGrid
+	s.currentState = StateWaitingEntry
 	s.gridPlaced = false // 重置网格标志
 
 	// 关闭旧的 waitForFillAndPlaceGrid，启动新的
@@ -327,7 +329,7 @@ func (s *MartingaleStrategy) waitForFillAndPlaceGrid() {
 			state := s.currentState
 			s.mu.RUnlock()
 
-			if state != StatePlacingGrid {
+			if state != StateWaitingEntry && state != StatePlacingGrid {
 				utils.Logger.Info("waitForFillAndPlaceGrid: state changed, aborting",
 					zap.String("state", string(state)))
 				return
@@ -389,7 +391,7 @@ func (s *MartingaleStrategy) handleOrderUpdate(ctx context.Context, event core.E
 			gridPlaced := s.gridPlaced
 			s.mu.RUnlock()
 
-			if prevState == StateIdle || prevState == StatePlacingGrid {
+			if prevState == StateIdle || prevState == StateWaitingEntry || prevState == StatePlacingGrid {
 				if !gridPlaced {
 					utils.Logger.Info("Base order filled, placing grid orders", zap.Float64("execPrice", buyFilledPrice))
 					s.mu.Lock()
@@ -450,20 +452,111 @@ func (s *MartingaleStrategy) enterLong(currentPrice float64) error {
 	baseQty := unitQty * 1.0
 	baseQty = utils.ToFixed(baseQty, s.quantityPrecision)
 
-	utils.Logger.Info("Calculated Base Qty",
+	// 挂单价格：currentPrice + 2*tickSize，略高于当前价以提高成交概率
+	limitPrice := currentPrice + 2*s.tickSize
+	limitPrice = utils.RoundToTickSize(limitPrice, s.tickSize)
+	limitPrice = utils.ToFixed(limitPrice, s.pricePrecision)
+
+	utils.Logger.Info("Calculated Base Qty (Maker Limit)",
 		zap.Float64("price", currentPrice),
+		zap.Float64("limit_price", limitPrice),
 		zap.Float64("unit_qty", unitQty),
 		zap.Float64("base_qty", baseQty),
 	)
 
-	_, err := s.exchange.PlaceOrder(futures.SideTypeBuy, futures.OrderTypeMarket, baseQty, 0)
+	// 尝试挂限价单（Maker 费率 0.02% vs Taker 0.05%）
+	resp, err := s.exchange.PlaceOrder(futures.SideTypeBuy, futures.OrderTypeLimit, baseQty, limitPrice)
 	if err != nil {
-		utils.Logger.Error("Failed to place base order", zap.Error(err))
-		return err
+		utils.Logger.Error("Failed to place base limit order, falling back to market", zap.Error(err))
+		// 挂单失败直接回退市价
+		_, err2 := s.exchange.PlaceOrder(futures.SideTypeBuy, futures.OrderTypeMarket, baseQty, 0)
+		if err2 != nil {
+			utils.Logger.Error("Failed to place base market order", zap.Error(err2))
+			return err2
+		}
+		return nil
 	}
 
-	// 状态已在 handleTick 中设置为 StatePlacingGrid
+	// 记录首仓挂单 ID
+	s.mu.Lock()
+	s.baseOrderID = resp.OrderID
+	s.mu.Unlock()
+
+	utils.Logger.Info("Base limit order placed",
+		zap.Int64("order_id", resp.OrderID),
+		zap.Float64("limit_price", limitPrice),
+		zap.Float64("qty", baseQty),
+	)
+
+	// 启动超时 goroutine：超时未成交则撤单并回退市价
+	go s.waitForEntryTimeout(baseQty)
+
 	return nil
+}
+
+// waitForEntryTimeout 首仓挂单超时监控
+// 如果 EntryTimeout 内首仓限价单未成交，撤单并以市价单重新入场
+func (s *MartingaleStrategy) waitForEntryTimeout(baseQty float64) {
+	timer := time.NewTimer(EntryTimeout)
+	defer timer.Stop()
+
+	select {
+	case <-s.waitStopCh:
+		// 新一轮入场开始，旧的超时监控退出
+		utils.Logger.Info("waitForEntryTimeout: stopped via channel")
+		return
+	case <-timer.C:
+		// 超时，检查状态是否仍在等待入场
+		s.mu.RLock()
+		state := s.currentState
+		orderID := s.baseOrderID
+		s.mu.RUnlock()
+
+		if state != StateWaitingEntry {
+			utils.Logger.Info("waitForEntryTimeout: state changed, no fallback needed",
+				zap.String("state", string(state)))
+			return
+		}
+
+		utils.Logger.Info("waitForEntryTimeout: limit order not filled in time, cancelling",
+			zap.Int64("order_id", orderID))
+
+		// 撤销限价单
+		if err := s.exchange.CancelOrder(orderID); err != nil {
+			utils.Logger.Warn("waitForEntryTimeout: failed to cancel limit order (may already be filled)",
+				zap.Error(err))
+			// 撤单失败可能是已成交，检查持仓确认
+			pos, err := s.exchange.GetPosition()
+			if err == nil {
+				amt, _ := strconv.ParseFloat(pos.PositionAmt, 64)
+				if math.Abs(amt) > 0 {
+					utils.Logger.Info("waitForEntryTimeout: position exists, limit order was filled")
+					return
+				}
+			}
+			// 无法确认，仍然尝试市价回退
+		}
+
+		// 再次检查状态（可能在撤单过程中收到了成交事件）
+		s.mu.RLock()
+		state = s.currentState
+		s.mu.RUnlock()
+		if state != StateWaitingEntry {
+			utils.Logger.Info("waitForEntryTimeout: state changed after cancel, no fallback needed",
+				zap.String("state", string(state)))
+			return
+		}
+
+		// 回退市价单
+		utils.Logger.Info("waitForEntryTimeout: placing market fallback order")
+		_, err := s.exchange.PlaceOrder(futures.SideTypeBuy, futures.OrderTypeMarket, baseQty, 0)
+		if err != nil {
+			utils.Logger.Error("waitForEntryTimeout: market fallback failed", zap.Error(err))
+			s.mu.Lock()
+			s.currentState = StateIdle
+			s.mu.Unlock()
+		}
+	}
 }
 
 func (s *MartingaleStrategy) placeGridOrders(execPrice float64) {
@@ -620,9 +713,10 @@ func (s *MartingaleStrategy) placeGridOrders(execPrice float64) {
 		price = utils.RoundToTickSize(price, s.tickSize)
 		price = utils.ToFixed(price, s.pricePrecision) // Should align to tickSize really
 
-		// Fibonacci Volume: Qty = UnitQty * Fib(i)
-		volMult := s.getFibonacci(i) // 1, 2, 3, 5...
-		qty := unitQty * float64(volMult)
+		// Fibonacci Volume: Qty = UnitQty * Fib(i) / 2
+		// Safety order multipliers: 0.5, 0.5, 1, 1.5, 2.5, 4, 6.5, 10.5...
+		volMult := s.getFibonacci(i)
+		qty := unitQty * volMult
 
 		// Ensure MinNotional (5 USDT) at the LIMIT PRICE
 		// If Qty * Price < 5.0, Binance will reject.
@@ -790,7 +884,7 @@ func (s *MartingaleStrategy) calcMinNotional() float64 {
 	return notional
 }
 
-func (s *MartingaleStrategy) getFibonacci(n int) int {
+func (s *MartingaleStrategy) getFibonacci(n int) float64 {
 	if n <= 0 {
 		return 0
 	}
@@ -798,5 +892,5 @@ func (s *MartingaleStrategy) getFibonacci(n int) int {
 	for i := 1; i < n; i++ {
 		a, b = b, a+b
 	}
-	return a
+	return float64(a) / 2.0
 }

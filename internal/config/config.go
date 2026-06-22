@@ -9,7 +9,6 @@ import (
 type Config struct {
 	Exchange ExchangeConfig `mapstructure:"exchange"`
 	Strategy StrategyConfig `mapstructure:"strategy"`
-	Storage  StorageConfig  `mapstructure:"storage"`
 	Log      LogConfig      `mapstructure:"log"`
 }
 
@@ -24,13 +23,6 @@ type StrategyConfig struct {
 	MaxSafetyOrders int     `mapstructure:"max_safety_orders"`
 	AtrPeriod       int     `mapstructure:"atr_period"`
 	BaseRatio       float64 `mapstructure:"base_ratio"`
-}
-
-type StorageConfig struct {
-	SqlitePath string `mapstructure:"sqlite_path"`
-	RedisAddr  string `mapstructure:"redis_addr"`
-	RedisPass  string `mapstructure:"redis_pass"`
-	RedisDB    int    `mapstructure:"redis_db"`
 }
 
 type LogConfig struct {

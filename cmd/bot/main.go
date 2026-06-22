@@ -1,15 +1,16 @@
 package main
 
 import (
+	"math"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/uykb/MartinStrategy/internal/config"
 	"github.com/uykb/MartinStrategy/internal/core"
 	"github.com/uykb/MartinStrategy/internal/exchange"
-	"github.com/uykb/MartinStrategy/internal/storage"
 	"github.com/uykb/MartinStrategy/internal/strategy"
 	"github.com/uykb/MartinStrategy/internal/utils"
 	"go.uber.org/zap"
@@ -36,28 +37,22 @@ func main() {
 	defer utils.Logger.Sync()
 	utils.Logger.Info("Starting MartinStrategy Bot", zap.String("symbol", cfg.Exchange.Symbol))
 
-	// 3. Storage
-	db, err := storage.InitStorage(cfg.Storage.SqlitePath, cfg.Storage.RedisAddr, cfg.Storage.RedisPass, cfg.Storage.RedisDB)
-	if err != nil {
-		utils.Logger.Fatal("Failed to init storage", zap.Error(err))
-	}
-
-	// 4. Event Bus
+	// 3. Event Bus
 	bus := core.NewEventBus()
 	bus.Start()
 	defer bus.Stop()
 
-	// 5. Exchange
+	// 4. Exchange
 	ex := exchange.NewBinanceClient(&cfg.Exchange, bus)
 	if err := ex.StartUserStream(); err != nil {
 		utils.Logger.Fatal("Failed to start user stream", zap.Error(err))
 	}
 
-	// 6. Start price polling (REST API fallback for markets without WS data)
+	// 5. Start price polling (REST API fallback for markets without WS data)
 	go ex.StartPricePolling(10 * time.Second)
 
 	// 6. Strategy
-	strat := strategy.NewMartingaleStrategy(&cfg.Strategy, ex, db, bus)
+	strat := strategy.NewMartingaleStrategy(&cfg.Strategy, ex, bus)
 	go strat.Start()
 
 	// 7. Wait for signal
@@ -69,15 +64,28 @@ func main() {
 
 	ex.StopUserStream()
 
-	// Graceful shutdown logic (e.g. CancelAllOrders if needed)
-	if err := ex.CancelAllOrders(); err != nil {
-		utils.Logger.Error("Failed to cancel orders on shutdown", zap.Error(err))
+	// Graceful shutdown: only cancel orders if no open position
+	// If a position exists, leave orders untouched so they survive restart
+	pos, posErr := ex.GetPosition()
+	if posErr != nil {
+		utils.Logger.Error("Failed to get position on shutdown, cancelling orders", zap.Error(posErr))
+		if err := ex.CancelAllOrders(); err != nil {
+			utils.Logger.Error("Failed to cancel orders on shutdown", zap.Error(err))
+		}
 	} else {
-		utils.Logger.Info("All orders cancelled")
+		amt, _ := strconv.ParseFloat(pos.PositionAmt, 64)
+		if math.Abs(amt) == 0 {
+			utils.Logger.Info("No open position, cancelling all orders before shutdown")
+			if err := ex.CancelAllOrders(); err != nil {
+				utils.Logger.Error("Failed to cancel orders on shutdown", zap.Error(err))
+			} else {
+				utils.Logger.Info("All orders cancelled")
+			}
+		} else {
+			utils.Logger.Info("Open position detected, preserving orders on shutdown",
+				zap.Float64("position_amt", amt))
+		}
 	}
-	
-	// Close DB connections if needed
-	// db.Redis.Close()
-	
+
 	utils.Logger.Info("Shutdown complete")
 }
