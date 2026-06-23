@@ -210,7 +210,7 @@ func (s *MartingaleStrategy) CloseAll() error {
 		if err == nil {
 			amt, _ := strconv.ParseFloat(pos.PositionAmt, 64)
 			if math.Abs(amt) > 0 {
-				if _, err := s.exchange.PlaceOrder(futures.SideTypeSell, futures.OrderTypeMarket, math.Abs(amt), 0); err != nil {
+				if _, err := s.exchange.PlaceOrder(futures.SideTypeSell, futures.OrderTypeMarket, math.Abs(amt), 0, true); err != nil {
 					s.addAlert(fmt.Sprintf("市价平仓失败: %v", err))
 				} else {
 					s.addAlert("市价平仓单已提交")
@@ -233,6 +233,13 @@ func (s *MartingaleStrategy) IsPaused() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.paused
+}
+
+// RefreshTP re-calculates and updates the take-profit order based on current position and ATR.
+func (s *MartingaleStrategy) RefreshTP() error {
+	s.addAlert("手动刷新止盈")
+	go s.updateTP()
+	return nil
 }
 
 // ── Fills & Alerts ring buffer ──────────────────────────────────────

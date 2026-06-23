@@ -257,13 +257,17 @@ func (bc *BinanceClient) GetExchangeInfo() (*futures.ExchangeInfo, error) {
 	return bc.client.NewExchangeInfoService().Do(context.Background())
 }
 
-func (bc *BinanceClient) PlaceOrder(side futures.SideType, orderType futures.OrderType, quantity, price float64) (*futures.CreateOrderResponse, error) {
+func (bc *BinanceClient) PlaceOrder(side futures.SideType, orderType futures.OrderType, quantity, price float64, reduceOnly bool) (*futures.CreateOrderResponse, error) {
 	qtyStr := strconv.FormatFloat(quantity, 'f', -1, 64)
 	service := bc.client.NewCreateOrderService().
 		Symbol(bc.cfg.Symbol).
 		Side(side).
 		Type(orderType).
 		Quantity(qtyStr)
+
+	if reduceOnly {
+		service.ReduceOnly(true)
+	}
 
 	if orderType == futures.OrderTypeLimit {
 		priceStr := strconv.FormatFloat(price, 'f', -1, 64)

@@ -445,6 +445,7 @@ func (s *MartingaleStrategy) handleOrderUpdate(ctx context.Context, event core.E
 			s.mu.Lock()
 	s.currentState = StateIdle
 	s.currentTPOrderID = 0
+	s.baseOrderID = 0       // 重置首仓挂单 ID
 	s.gridPlaced = false     // 重置网格标志，准备下一轮
 	s.gridFilledCount = 0    // 重置成交计数
 	utils.Logger.Info("Sell filled: state reset to IDLE", zap.Bool("gridPlaced", s.gridPlaced))
@@ -489,11 +490,11 @@ func (s *MartingaleStrategy) enterLong(currentPrice float64) error {
 	)
 
 	// 尝试挂限价单（Maker 费率 0.02% vs Taker 0.05%）
-	resp, err := s.exchange.PlaceOrder(futures.SideTypeBuy, futures.OrderTypeLimit, baseQty, limitPrice)
+	resp, err := s.exchange.PlaceOrder(futures.SideTypeBuy, futures.OrderTypeLimit, baseQty, limitPrice, false)
 	if err != nil {
 		utils.Logger.Error("Failed to place base limit order, falling back to market", zap.Error(err))
 		// 挂单失败直接回退市价
-		_, err2 := s.exchange.PlaceOrder(futures.SideTypeBuy, futures.OrderTypeMarket, baseQty, 0)
+		_, err2 := s.exchange.PlaceOrder(futures.SideTypeBuy, futures.OrderTypeMarket, baseQty, 0, false)
 		if err2 != nil {
 			utils.Logger.Error("Failed to place base market order", zap.Error(err2))
 			return err2
@@ -573,7 +574,7 @@ func (s *MartingaleStrategy) waitForEntryTimeout(baseQty float64) {
 
 		// 回退市价单
 		utils.Logger.Info("waitForEntryTimeout: placing market fallback order")
-		_, err := s.exchange.PlaceOrder(futures.SideTypeBuy, futures.OrderTypeMarket, baseQty, 0)
+		_, err := s.exchange.PlaceOrder(futures.SideTypeBuy, futures.OrderTypeMarket, baseQty, 0, false)
 		if err != nil {
 			utils.Logger.Error("waitForEntryTimeout: market fallback failed", zap.Error(err))
 			s.mu.Lock()
@@ -765,7 +766,7 @@ func (s *MartingaleStrategy) placeGridOrders(execPrice float64) {
 			zap.Float64("dist_atr", stepDist),
 		)
 
-		_, err := s.exchange.PlaceOrder(futures.SideTypeBuy, futures.OrderTypeLimit, qty, price)
+		_, err := s.exchange.PlaceOrder(futures.SideTypeBuy, futures.OrderTypeLimit, qty, price, false)
 		if err != nil {
 			utils.Logger.Error("Failed to place safety order", zap.Int("index", i), zap.Error(err))
 		}
@@ -855,10 +856,15 @@ func (s *MartingaleStrategy) updateTP() {
 
 	utils.Logger.Info("Updating TP", zap.Float64("Price", tpPrice), zap.Float64("Qty", tpQty))
 
-	resp, err := s.exchange.PlaceOrder(futures.SideTypeSell, futures.OrderTypeLimit, tpQty, tpPrice)
+	resp, err := s.exchange.PlaceOrder(futures.SideTypeSell, futures.OrderTypeLimit, tpQty, tpPrice, true)
 	if err != nil {
-		utils.Logger.Error("Failed to place TP order", zap.Error(err))
-		return
+		utils.Logger.Warn("Failed to place TP order, retrying once", zap.Error(err))
+		time.Sleep(500 * time.Millisecond)
+		resp, err = s.exchange.PlaceOrder(futures.SideTypeSell, futures.OrderTypeLimit, tpQty, tpPrice, true)
+		if err != nil {
+			utils.Logger.Error("Failed to place TP order after retry", zap.Error(err))
+			return
+		}
 	}
 
 	s.mu.Lock()

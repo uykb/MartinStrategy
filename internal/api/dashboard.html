@@ -75,7 +75,6 @@ button.act:disabled{opacity:.45;cursor:not-allowed}
   <span id="dot" class="dot"></span>
   <h1>Martin 马丁格尔</h1>
   <span id="stateBadge" class="badge state-idle">IDLE</span>
-  <span id="pauseBadge" class="badge paused" style="display:none">已暂停</span>
   <span class="ip-badge" id="ipBadge" title="点击复制公网IP — 用于添加Binance API白名单" onclick="copyIP()">获取IP…</span>
   <div class="hdr-actions">
     <span class="muted" style="font-size:11px" id="conn">连接中…</span>
@@ -85,8 +84,8 @@ button.act:disabled{opacity:.45;cursor:not-allowed}
 
 <main class="page">
   <div class="controls">
-    <button class="act start" id="resumeBtn">恢复</button>
-    <button class="act ghost" id="pauseBtn">暂停</button>
+    <button class="act ghost" id="pauseToggleBtn">暂停</button>
+    <button class="act smart" id="refreshTpBtn">刷新TP</button>
     <button class="act stop" id="closeAllBtn">全部平仓</button>
   </div>
 
@@ -204,8 +203,15 @@ $('loginBtn').onclick=async()=>{
 $('tokenInput').onkeydown=e=>{if(e.key==='Enter')$('loginBtn').click()};
 $('logoutBtn').onclick=()=>{clearToken();showLogin('')};
 
-$('pauseBtn').onclick=async()=>{try{await apiPost('/api/pause')}catch(e){alert(e.message)}};
-$('resumeBtn').onclick=async()=>{try{await apiPost('/api/resume')}catch(e){alert(e.message)}};
+$('pauseToggleBtn').onclick=async()=>{
+  const paused=$('pauseToggleBtn').textContent==='恢复';
+  try{await apiPost(paused?'/api/resume':'/api/pause')}catch(e){alert(e.message)}
+};
+$('refreshTpBtn').onclick=async()=>{
+  const b=$('refreshTpBtn');b.disabled=true;
+  try{await apiPost('/api/refresh-tp');b.textContent='已提交'}catch(e){alert(e.message);b.textContent='刷新TP'}
+  setTimeout(()=>{b.disabled=false;b.textContent='刷新TP'},2000);
+};
 $('closeAllBtn').onclick=async()=>{
   if(!confirm('确认全部平仓？将撤销所有挂单并市价平仓。'))return;
   const b=$('closeAllBtn');b.disabled=true;b.textContent='平仓中…';
@@ -229,7 +235,9 @@ function render(s){
   const badge=$('stateBadge');
   badge.textContent=s.stateLabel||s.state;
   badge.className='badge '+stateCls(s.state);
-  $('pauseBadge').style.display=s.paused?'':'none';
+  const toggle=$('pauseToggleBtn');
+  if(s.paused){toggle.textContent='恢复';toggle.className='act start';}
+  else{toggle.textContent='暂停';toggle.className='act ghost';}
 
   // Summary
   $('sumBal').textContent=usd(s.balance);
