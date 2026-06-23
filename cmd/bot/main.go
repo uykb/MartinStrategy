@@ -14,6 +14,8 @@ import (
 	"github.com/uykb/MartinStrategy/internal/strategy"
 	"github.com/uykb/MartinStrategy/internal/utils"
 	"go.uber.org/zap"
+
+	"github.com/uykb/MartinStrategy/internal/api"
 )
 
 func main() {
@@ -55,7 +57,18 @@ func main() {
 	strat := strategy.NewMartingaleStrategy(&cfg.Strategy, ex, bus)
 	go strat.Start()
 
-	// 7. Wait for signal
+	// 7. Web Dashboard (API server with SSE)
+	if cfg.API.Enabled {
+		apiSrv := api.NewServer(strat, cfg.API.Port, cfg.API.AuthToken)
+		go func() {
+			if err := apiSrv.Start(); err != nil {
+				utils.Logger.Error("API server error", zap.Error(err))
+			}
+		}()
+		utils.Logger.Info("Dashboard started", zap.Int("port", cfg.API.Port))
+	}
+
+	// 8. Wait for signal
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigChan

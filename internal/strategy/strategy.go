@@ -64,7 +64,18 @@ type MartingaleStrategy struct {
 	tpSkipCount   int64 // updateTP 跳过次数
 
 	// 状态标志
-	gridPlaced bool // 标志网格是否已放置，防止重复
+	gridPlaced      bool  // 标志网格是否已放置，防止重复
+	paused          bool  // 策略暂停标志
+	gridFilledCount int   // 已成交的网格安全单数量
+
+	// Dashboard cache (periodically refreshed)
+	cachedBalance  float64
+	cachedPosition *futures.AccountPosition
+	cachedOrders   []*futures.Order
+
+	// Dashboard history (ring buffers)
+	fills  []FillInfo
+	alerts []AlertInfo
 }
 
 func NewMartingaleStrategy(cfg *config.StrategyConfig, ex *exchange.BinanceClient, bus *core.EventBus) *MartingaleStrategy {
@@ -94,6 +105,9 @@ func (s *MartingaleStrategy) Start() {
 	// Background goroutine to check position status periodically
 	// This handles cases where position is closed manually (e.g., via Binance UI)
 	go s.monitorPositionStatus()
+
+	// Background cache refresh for web dashboard
+	go s.refreshCacheLoop()
 }
 
 func (s *MartingaleStrategy) monitorPositionStatus() {
@@ -275,7 +289,7 @@ func (s *MartingaleStrategy) handleTick(ctx context.Context, event core.Event) e
 
 	// 原子状态检查
 	s.mu.Lock()
-	if s.currentState != StateIdle {
+	if s.currentState != StateIdle || s.paused {
 		s.mu.Unlock()
 		return nil
 	}
@@ -381,6 +395,7 @@ func (s *MartingaleStrategy) handleOrderUpdate(ctx context.Context, event core.E
 	if order.Status == futures.OrderStatusTypeFilled {
 		if order.Side == futures.SideTypeBuy {
 			buyFilledPrice, _ := strconv.ParseFloat(order.AveragePrice, 64)
+			buyFilledQty, _ := strconv.ParseFloat(order.LastFilledQty, 64)
 			utils.Logger.Info("Buy Order Filled", zap.String("type", string(order.Type)), zap.Float64("execPrice", buyFilledPrice))
 
 			s.mu.Lock()
@@ -394,35 +409,44 @@ func (s *MartingaleStrategy) handleOrderUpdate(ctx context.Context, event core.E
 			if prevState == StateIdle || prevState == StateWaitingEntry || prevState == StatePlacingGrid {
 				if !gridPlaced {
 					utils.Logger.Info("Base order filled, placing grid orders", zap.Float64("execPrice", buyFilledPrice))
+					s.addFill("BUY", "BASE", buyFilledPrice, buyFilledQty)
 					s.mu.Lock()
 					s.currentState = StateInPosition
 					s.mu.Unlock()
 					go s.placeGridOrders(buyFilledPrice)
 				} else {
 					utils.Logger.Info("Base order filled but grid already placed, updating TP", zap.Float64("execPrice", buyFilledPrice))
+					s.addFill("BUY", "SAFETY", buyFilledPrice, buyFilledQty)
 					s.mu.Lock()
+					s.gridFilledCount++
 					s.currentState = StateInPosition
 					s.mu.Unlock()
 					go s.updateTP()
 				}
 			} else {
 				utils.Logger.Info("Safety order filled, re-calculating TP", zap.Float64("execPrice", buyFilledPrice))
+				s.addFill("BUY", "SAFETY", buyFilledPrice, buyFilledQty)
+				s.mu.Lock()
+				s.gridFilledCount++
+				s.mu.Unlock()
 				go s.updateTP()
 			}
 		} else if order.Side == futures.SideTypeSell {
-			// Sell Order Filled (TP, Manual, or Stop)
-			// Assume any sell fill in Long strategy means closing/reducing position
-			// For simplicity in Martingale, we assume full close on TP
+			sellFilledPrice, _ := strconv.ParseFloat(order.AveragePrice, 64)
+			sellFilledQty, _ := strconv.ParseFloat(order.LastFilledQty, 64)
 
 			utils.Logger.Info("Sell Order Filled (TP/Manual). Resetting to IDLE.",
 				zap.String("type", string(order.Type)),
 				zap.String("status", string(order.Status)),
 			)
 
+			s.addFill("SELL", "TP", sellFilledPrice, sellFilledQty)
+
 			s.mu.Lock()
 	s.currentState = StateIdle
 	s.currentTPOrderID = 0
-	s.gridPlaced = false // 重置网格标志，准备下一轮
+	s.gridPlaced = false     // 重置网格标志，准备下一轮
+	s.gridFilledCount = 0    // 重置成交计数
 	utils.Logger.Info("Sell filled: state reset to IDLE", zap.Bool("gridPlaced", s.gridPlaced))
 	s.mu.Unlock()
 

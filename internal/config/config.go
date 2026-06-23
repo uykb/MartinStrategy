@@ -9,6 +9,7 @@ import (
 type Config struct {
 	Exchange ExchangeConfig `mapstructure:"exchange"`
 	Strategy StrategyConfig `mapstructure:"strategy"`
+	API      ApiConfig      `mapstructure:"api"`
 	Log      LogConfig      `mapstructure:"log"`
 }
 
@@ -23,6 +24,12 @@ type StrategyConfig struct {
 	MaxSafetyOrders int     `mapstructure:"max_safety_orders"`
 	AtrPeriod       int     `mapstructure:"atr_period"`
 	BaseRatio       float64 `mapstructure:"base_ratio"`
+}
+
+type ApiConfig struct {
+	Enabled   bool   `mapstructure:"enabled"`
+	Port      int    `mapstructure:"port"`
+	AuthToken string `mapstructure:"auth_token"`
 }
 
 type LogConfig struct {

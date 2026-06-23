@@ -9,5 +9,10 @@ strategy:
   atr_period: 14
   base_ratio: 0.05
 
+api:
+  enabled: true
+  port: 8080
+  auth_token: ""
+
 log:
   level: "info"

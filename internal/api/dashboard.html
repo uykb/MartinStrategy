@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Martin 马丁格尔</title>
+<style>
+:root{--bg:#0d1117;--panel:#161b22;--border:#30363d;--txt:#e6edf3;--mut:#8b949e;
+      --grn:#2ea043;--red:#f85149;--blu:#58a6ff;--yel:#d29922;--accent:#7c5cff}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{background:var(--bg);color:var(--txt);font:13px/1.45 -apple-system,Segoe UI,Roboto,"PingFang SC","Microsoft YaHei",sans-serif}
+header{display:flex;align-items:center;gap:10px;padding:8px 16px;border-bottom:1px solid var(--border);background:var(--panel);flex-shrink:0}
+header h1{font-size:15px;margin:0;font-weight:600}
+.badge{font-size:11px;padding:2px 8px;border-radius:20px;font-weight:600;border:1px solid var(--border)}
+.badge.state-idle{color:var(--mut);border-color:var(--border)}
+.badge.state-waiting{color:var(--yel);border-color:#d2992255;background:#d2992215}
+.badge.state-placing{color:var(--blu);border-color:#388bfd55;background:#388bfd15}
+.badge.state-position{color:var(--grn);border-color:#3fb95055;background:#3fb95015}
+.badge.state-closing{color:var(--red);border-color:#f8514955;background:#f8514915}
+.badge.paused{color:var(--red);border-color:#f85149;background:#f8514922}
+.dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:4px;background:var(--red)}
+.dot.on{background:var(--grn);box-shadow:0 0 6px var(--grn)}
+.hdr-actions{display:flex;align-items:center;gap:8px;margin-left:auto}
+.page{max-width:1200px;margin:0 auto;padding:16px 20px 24px}
+.summary{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:16px}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px 14px}
+.card label{display:block;font-size:11px;color:var(--mut);letter-spacing:.02em;margin-bottom:5px}
+.card .big{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
+.card .sub{font-size:11px;color:var(--mut);margin-top:4px}
+.up{color:var(--grn)}.down{color:var(--red)}
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:14px}
+.panel-head{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--border)}
+.panel-head h2{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--mut)}
+.panel-body{padding:0 14px 12px;overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th,td{text-align:right;padding:5px 8px;border-bottom:1px solid var(--border);white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+th{color:var(--mut);font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.3px}
+.empty{color:var(--mut);text-align:center;padding:20px 8px;font-size:12px}
+.bottom2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.controls{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+button.act{padding:8px 16px;border:none;border-radius:6px;font-weight:600;cursor:pointer;color:#fff;font-size:12px}
+button.act:disabled{opacity:.45;cursor:not-allowed}
+.start{background:var(--grn)}.stop{background:var(--red)}.ghost{background:transparent;border:1px solid var(--border);color:var(--txt)}
+.smart{background:linear-gradient(90deg,#7c5cff,#388bfd)}
+.pill{display:inline-block;padding:1px 6px;border-radius:8px;font-size:10px;font-weight:600}
+.pill.buy{background:#2ea04322;color:#3fb950}.pill.sell{background:#f8514922;color:#ff7b72}
+.alerts-box{max-height:200px;overflow-y:auto;font-size:11px}
+.alerts-box div{padding:4px 0;border-bottom:1px dashed var(--border);color:var(--mut)}
+#loginGate{position:fixed;inset:0;z-index:99;background:var(--bg);display:none;align-items:center;justify-content:center}
+.login-card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:28px 24px;width:360px;text-align:center}
+.login-card input{width:100%;padding:12px;font-size:15px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--txt);margin:12px 0}
+.login-card button{width:100%;padding:12px;font-size:14px;font-weight:600;background:var(--grn);color:#fff;border:none;border-radius:6px;cursor:pointer}
+.login-err{color:var(--red);font-size:12px;margin-top:8px}
+.btn-sm{padding:3px 8px;border-radius:5px;border:1px solid var(--border);background:var(--bg);color:var(--txt);cursor:pointer;font-size:10px;font-weight:600}
+.ip-badge{font-size:10px;color:var(--blu);border:1px solid #388bfd44;background:#388bfd12;border-radius:4px;padding:2px 8px;cursor:pointer;user-select:all;white-space:nowrap}
+.ip-badge:hover{border-color:var(--blu)}
+@media(max-width:768px){.summary{grid-template-columns:1fr 1fr}.bottom2{grid-template-columns:1fr}.card .big{font-size:16px}.page{padding:12px}header{padding:8px 12px;flex-wrap:wrap}}
+@media(max-width:480px){.summary{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div id="loginGate">
+  <div class="login-card">
+    <h2>Martin 马丁格尔</h2>
+    <p style="color:var(--mut);font-size:13px;margin:8px 0 16px">输入 .env 中的 API_AUTH_TOKEN</p>
+    <input id="tokenInput" type="password" placeholder="访问密码" autocomplete="current-password" />
+    <div class="login-err" id="loginErr"></div>
+    <button class="act start" id="loginBtn">登录</button>
+  </div>
+</div>
+
+<header>
+  <span id="dot" class="dot"></span>
+  <h1>Martin 马丁格尔</h1>
+  <span id="stateBadge" class="badge state-idle">IDLE</span>
+  <span id="pauseBadge" class="badge paused" style="display:none">已暂停</span>
+  <span class="ip-badge" id="ipBadge" title="点击复制公网IP — 用于添加Binance API白名单" onclick="copyIP()">获取IP…</span>
+  <div class="hdr-actions">
+    <span class="muted" style="font-size:11px" id="conn">连接中…</span>
+    <button class="btn-sm" id="logoutBtn" style="display:none">退出</button>
+  </div>
+</header>
+
+<main class="page">
+  <div class="controls">
+    <button class="act start" id="resumeBtn">恢复</button>
+    <button class="act ghost" id="pauseBtn">暂停</button>
+    <button class="act stop" id="closeAllBtn">全部平仓</button>
+  </div>
+
+  <section class="summary">
+    <div class="card"><label>余额 &middot; 权益</label><div class="big" id="sumBal">—</div><div class="sub" id="sumEq">—</div></div>
+    <div class="card"><label>状态</label><div class="big" id="sumState">—</div><div class="sub" id="sumSymbol">—</div></div>
+    <div class="card"><label>网格</label><div class="big" id="sumGrid">—</div><div class="sub" id="sumGridSub">—</div></div>
+    <div class="card"><label>挂单</label><div class="big" id="sumOrders">—</div><div class="sub" id="sumOrdersSub">—</div></div>
+    <div class="card"><label>未实现盈亏</label><div class="big" id="sumPnl">—</div><div class="sub" id="sumPnlSub">—</div></div>
+  </section>
+
+  <article class="panel">
+    <div class="panel-head"><h2>当前持仓</h2><span class="muted" style="font-size:11px" id="posMeta">—</span></div>
+    <div class="panel-body" id="posBody"><div class="empty">暂无持仓</div></div>
+  </article>
+
+  <div class="bottom2">
+    <article class="panel">
+      <div class="panel-head"><h2>挂单</h2><span class="muted" style="font-size:11px" id="ordersCount">0 单</span></div>
+      <div class="panel-body" id="ordersBody"><div class="empty">无挂单</div></div>
+    </article>
+    <article class="panel">
+      <div class="panel-head"><h2>止盈单</h2></div>
+      <div class="panel-body" id="tpBody"><div class="empty">无止盈单</div></div>
+    </article>
+  </div>
+
+  <div class="bottom2">
+    <article class="panel">
+      <div class="panel-head"><h2>最近成交</h2><span class="muted" style="font-size:11px" id="fillsCount">0 笔</span></div>
+      <div class="panel-body" id="fillsBody"><div class="empty">暂无成交</div></div>
+    </article>
+    <article class="panel">
+      <div class="panel-head"><h2>日志</h2><span class="muted" style="font-size:11px" id="alertsCount">0 条</span></div>
+      <div class="panel-body"><div class="alerts-box" id="alertsBox"><div class="empty">暂无日志</div></div></div>
+    </article>
+  </div>
+</main>
+
+<script>
+const TOKEN_KEY='martin_dash_token';
+const $=id=>document.getElementById(id);
+let es=null;
+
+function getToken(){return localStorage.getItem(TOKEN_KEY)||''}
+function setToken(t){localStorage.setItem(TOKEN_KEY,t.trim())}
+function clearToken(){localStorage.removeItem(TOKEN_KEY)}
+
+function authHeaders(){const t=getToken();return t?{Authorization:'Bearer '+t}:{}}
+function authQuery(){const t=getToken();return t?'?token='+encodeURIComponent(t):''}
+
+async function apiFetch(path,opts={}){
+  const r=await fetch(path,{...opts,headers:{...authHeaders(),...(opts.headers||{})}});
+  if(r.status===401||r.status===403)throw new Error('AUTH');
+  return r;
+}
+async function apiPost(url,body){
+  const r=await apiFetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body??{})});
+  const j=await r.json();
+  if(!r.ok)throw new Error(j.error||'失败');
+  return j;
+}
+
+async function verifyToken(t){
+  const r=await fetch('/api/state',{headers:{Authorization:'Bearer '+t}});
+  return r.ok;
+}
+
+function showLogin(err){
+  if(es){es.close();es=null}
+  $('loginGate').style.display='flex';
+  $('loginErr').textContent=err||'';
+}
+function showApp(){
+  $('loginGate').style.display='none';
+  connectStream();
+}
+
+function connectStream(){
+  if(es)es.close();
+  es=new EventSource('/api/stream'+authQuery());
+  es.onmessage=e=>{
+    try{render(JSON.parse(e.data))}catch(err){console.error(err)}
+    $('dot').className='dot on';
+    $('conn').textContent='已连接';
+  };
+  es.onerror=()=>{
+    $('dot').className='dot';
+    $('conn').textContent='重连中…';
+  };
+}
+
+async function boot(){
+  try{
+    const h=await(await fetch('/api/health')).json();
+    if(h.public_ip){$('ipBadge').textContent='🌐 '+h.public_ip}
+    else{$('ipBadge').textContent='未获取IP'}
+    if(!h.auth_enabled){showApp();return}
+    const t=getToken();
+    if(t && await verifyToken(t)){showApp();$('logoutBtn').style.display='';return}
+    if(t)clearToken();
+    showLogin('');
+  }catch(e){showLogin('无法连接服务')}
+}
+
+$('loginBtn').onclick=async()=>{
+  const t=$('tokenInput').value.trim();
+  if(!t)return;
+  $('loginErr').textContent='';
+  setToken(t);
+  if(await verifyToken(t)){$('logoutBtn').style.display='';showApp();return}
+  clearToken();
+  $('loginErr').textContent='密码无效';
+};
+$('tokenInput').onkeydown=e=>{if(e.key==='Enter')$('loginBtn').click()};
+$('logoutBtn').onclick=()=>{clearToken();showLogin('')};
+
+$('pauseBtn').onclick=async()=>{try{await apiPost('/api/pause')}catch(e){alert(e.message)}};
+$('resumeBtn').onclick=async()=>{try{await apiPost('/api/resume')}catch(e){alert(e.message)}};
+$('closeAllBtn').onclick=async()=>{
+  if(!confirm('确认全部平仓？将撤销所有挂单并市价平仓。'))return;
+  const b=$('closeAllBtn');b.disabled=true;b.textContent='平仓中…';
+  try{await apiPost('/api/close-all');b.textContent='已提交'}catch(e){alert(e.message)}
+  setTimeout(()=>{b.disabled=false;b.textContent='全部平仓'},3000);
+};
+
+function usd(n){const v=Number(n);if(!Number.isFinite(v))return'—';return'$'+v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}
+function signed(n){const v=Number(n);if(!Number.isFinite(v))return'—';const s=v>=0?'+':'-';return s+'$'+Math.abs(v).toFixed(2)}
+function pnlCls(v){const n=Number(v);if(!Number.isFinite(n)||Math.abs(n)<0.005)return'';return n>0?'up':'down'}
+function fmtPrice(x){if(x==null||x===0)return'—';const n=Number(x);return n>=100?n.toFixed(2):n>=1?n.toFixed(4):n.toPrecision(4)}
+function fmtSize(n){const v=Number(n);if(!Number.isFinite(v))return'—';return v>=1000?v.toLocaleString('en-US',{maximumFractionDigits:2}):v>=1?v.toFixed(4):v.toPrecision(4)}
+
+function stateCls(s){
+  const m={'IDLE':'state-idle','WAITING_ENTRY':'state-waiting','PLACING_GRID':'state-placing','IN_POSITION':'state-position','CLOSING':'state-closing'};
+  return m[s]||'state-idle';
+}
+
+function render(s){
+  // Header
+  const badge=$('stateBadge');
+  badge.textContent=s.stateLabel||s.state;
+  badge.className='badge '+stateCls(s.state);
+  $('pauseBadge').style.display=s.paused?'':'none';
+
+  // Summary
+  $('sumBal').textContent=usd(s.balance);
+  $('sumEq').className='big';
+  $('sumEq').textContent=usd(s.equity);
+  $('sumState').textContent=s.stateLabel||s.state;
+  $('sumSymbol').textContent=s.symbol||'—';
+
+  if(s.grid){
+    $('sumGrid').textContent=(s.grid.filledLevels||0)+'/'+(s.grid.maxLevels||0)+' 层';
+    $('sumGridSub').textContent=s.grid.placed?'网格已放置':'网格未放置';
+  }
+
+  $('sumOrders').textContent=(s.openOrders||[]).length+' 单';
+  $('sumOrdersSub').textContent=s.tpOrder?'含止盈单':'无止盈单';
+
+  const pnl=s.position&&s.position.hasPosition?s.position.unrealizedPnl:0;
+  $('sumPnl').innerHTML='<span class="'+pnlCls(pnl)+'">'+signed(pnl)+'</span>';
+  $('sumPnlSub').textContent=s.position&&s.position.hasPosition?s.position.unrealizedPct.toFixed(2)+'%':'无持仓';
+
+  // Position
+  if(s.position&&s.position.hasPosition){
+    const p=s.position;
+    $('posMeta').textContent=p.side+' · '+fmtSize(p.size)+' · 杠杆 '+p.leverage+'x';
+    $('posBody').innerHTML='<table><thead><tr><th>方向</th><th>数量</th><th>开仓价</th><th>标记价</th><th>杠杆</th><th>未实现盈亏</th><th>盈亏%</th></tr></thead><tbody><tr>'+
+      '<td><span class="pill buy">'+p.side+'</span></td>'+
+      '<td>'+fmtSize(p.size)+'</td>'+
+      '<td>'+fmtPrice(p.entryPrice)+'</td>'+
+      '<td>'+fmtPrice(p.markPrice)+'</td>'+
+      '<td>'+p.leverage+'x</td>'+
+      '<td class="'+pnlCls(p.unrealizedPnl)+'">'+signed(p.unrealizedPnl)+'</td>'+
+      '<td class="'+pnlCls(p.unrealizedPnl)+'">'+p.unrealizedPct.toFixed(2)+'%</td>'+
+      '</tr></tbody></table>';
+  }else{
+    $('posMeta').textContent='—';
+    $('posBody').innerHTML='<div class="empty">暂无持仓</div>';
+  }
+
+  // Open orders
+  const orders=s.openOrders||[];
+  $('ordersCount').textContent=orders.length+' 单';
+  if(orders.length){
+    $('ordersBody').innerHTML='<table><thead><tr><th>订单ID</th><th>方向</th><th>类型</th><th>价格</th><th>数量</th><th>状态</th><th>只减仓</th></tr></thead><tbody>'+
+      orders.map(o=>
+        '<tr><td>'+o.orderId+'</td>'+
+        '<td><span class="pill '+o.side.toLowerCase()+'">'+o.side+'</span></td>'+
+        '<td>'+o.type+'</td>'+
+        '<td>'+fmtPrice(o.price)+'</td>'+
+        '<td>'+fmtSize(o.quantity)+'</td>'+
+        '<td>'+o.status+'</td>'+
+        '<td>'+(o.reduceOnly?'是':'—')+'</td></tr>'
+      ).join('')+'</tbody></table>';
+  }else{
+    $('ordersBody').innerHTML='<div class="empty">无挂单</div>';
+  }
+
+  // TP order
+  if(s.tpOrder){
+    const tp=s.tpOrder;
+    $('tpBody').innerHTML='<table><thead><tr><th>订单ID</th><th>方向</th><th>价格</th><th>数量</th><th>状态</th></tr></thead><tbody><tr>'+
+      '<td>'+tp.orderId+'</td>'+
+      '<td><span class="pill sell">SELL</span></td>'+
+      '<td>'+fmtPrice(tp.price)+'</td>'+
+      '<td>'+fmtSize(tp.quantity)+'</td>'+
+      '<td>'+tp.status+'</td></tr></tbody></table>';
+  }else{
+    $('tpBody').innerHTML='<div class="empty">无止盈单</div>';
+  }
+
+  // Fills
+  const fills=s.fills||[];
+  $('fillsCount').textContent=fills.length+' 笔';
+  if(fills.length){
+    $('fillsBody').innerHTML='<table><thead><tr><th>时间</th><th>方向</th><th>类型</th><th>价格</th><th>数量</th></tr></thead><tbody>'+
+      fills.slice().reverse().map(f=>
+        '<tr><td>'+f.time+'</td>'+
+        '<td><span class="pill '+f.side.toLowerCase()+'">'+f.side+'</span></td>'+
+        '<td>'+f.type+'</td>'+
+        '<td>'+fmtPrice(f.price)+'</td>'+
+        '<td>'+fmtSize(f.quantity)+'</td></tr>'
+      ).join('')+'</tbody></table>';
+  }else{
+    $('fillsBody').innerHTML='<div class="empty">暂无成交</div>';
+  }
+
+  // Alerts
+  const alerts=s.alerts||[];
+  $('alertsCount').textContent=alerts.length+' 条';
+  if(alerts.length){
+    $('alertsBox').innerHTML=alerts.slice().reverse().map(a=>
+      '<div><b>'+a.time+'</b> '+a.message+'</div>'
+    ).join('');
+  }else{
+    $('alertsBox').innerHTML='<div class="empty">暂无日志</div>';
+  }
+}
+
+function copyIP(){
+  const el=$('ipBadge');
+  const ip=el.textContent.replace('🌐 ','');
+  navigator.clipboard.writeText(ip).then(()=>{
+    el.textContent='已复制!';
+    setTimeout(()=>el.textContent='🌐 '+ip,1500);
+  }).catch(()=>{
+    // Fallback for non-HTTPS
+    const ta=document.createElement('textarea');ta.value=ip;document.body.appendChild(ta);ta.select();
+    document.execCommand('copy');document.body.removeChild(ta);
+    el.textContent='已复制!';
+    setTimeout(()=>el.textContent='🌐 '+ip,1500);
+  });
+}
+
+boot();
+</script>
+</body>
+</html>
