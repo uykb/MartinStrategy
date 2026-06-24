@@ -314,8 +314,8 @@ function signed(n){const v=Number(n);if(!Number.isFinite(v))return'—';const s=
 function pnlCls(v){const n=Number(v);if(!Number.isFinite(n)||Math.abs(n)<0.005)return'';return n>0?'up':'down'}
 function fmtPrice(x){if(x==null||x===0)return'—';const n=Number(x);return n>=100?n.toFixed(2):n>=1?n.toFixed(4):n.toPrecision(4)}
 function fmtSize(n){const v=Number(n);if(!Number.isFinite(v))return'—';return v>=1000?v.toLocaleString('en-US',{maximumFractionDigits:2}):v>=1?v.toFixed(4):v.toPrecision(4)}
-function fmtP(x){if(x==null||x===0)return'—';const n=Number(x);return n>=100?n.toFixed(2):n>=1?n.toFixed(4):n>=0.01?n.toFixed(6):n.toFixed(8)}
-function fmtQ(x){if(x==null||x===0)return'—';const n=Number(x);return n>=1000?n.toFixed(2):n>=1?n.toFixed(4):n.toFixed(6)}
+function fmtP(x){if(x==null||x===0)return'—';const n=Number(x);const s=n>=100?n.toFixed(2):n>=1?n.toFixed(3):n>=0.01?n.toFixed(5):n.toFixed(8);return parseFloat(s)}
+function fmtQ(x){if(x==null||x===0)return'—';const n=Number(x);const s=n>=1000?n.toFixed(2):n>=1?n.toFixed(2):n.toFixed(4);return parseFloat(s)}
 
 function stateCls(s){
   const m={'IDLE':'state-idle','WAITING_ENTRY':'state-waiting','PLACING_GRID':'state-placing','IN_POSITION':'state-position','CLOSING':'state-closing'};
