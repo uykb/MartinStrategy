@@ -1,10 +1,13 @@
 package main
 
 import (
+	"io"
 	"math"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -17,6 +20,20 @@ import (
 
 	"github.com/uykb/MartinStrategy/internal/api"
 )
+
+// fetchPublicIP queries http://ipinfo.io/ip to get the server's public IP address.
+func fetchPublicIP() string {
+	resp, err := http.Get("http://ipinfo.io/ip")
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(body))
+}
 
 func main() {
 	// 1. Config (Load from Env Vars only)
@@ -38,6 +55,13 @@ func main() {
 	}
 	defer utils.Logger.Sync()
 	utils.Logger.Info("Starting MartinStrategy Bot", zap.String("symbol", cfg.Exchange.Symbol))
+
+	// 2.5 Log public IP for Binance API whitelist
+	if ip := fetchPublicIP(); ip != "" {
+		utils.Logger.Info("容器公网 IP（请加入 Binance API 白名单）", zap.String("ip", ip))
+	} else {
+		utils.Logger.Warn("无法获取公网 IP，请手动查询并加入 Binance API 白名单")
+	}
 
 	// 3. Event Bus
 	bus := core.NewEventBus()
