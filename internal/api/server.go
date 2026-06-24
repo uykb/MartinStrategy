@@ -24,6 +24,7 @@ type StrategyController interface {
 	Resume() error
 	CloseAll() error
 	RefreshTP() error
+	GetKlines(interval string, limit int) ([]strategy.KlineBar, error)
 }
 
 // Server serves the web dashboard and REST API.
@@ -95,6 +96,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/resume", s.withAuth(s.handleResume))
 	mux.HandleFunc("/api/close-all", s.withAuth(s.handleCloseAll))
 	mux.HandleFunc("/api/refresh-tp", s.withAuth(s.handleRefreshTP))
+	mux.HandleFunc("/api/klines", s.withAuth(s.handleKlines))
 
 	go s.pushLoop()
 
@@ -278,6 +280,25 @@ func (s *Server) handleCloseAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleKlines(w http.ResponseWriter, r *http.Request) {
+	interval := r.URL.Query().Get("interval")
+	if interval == "" {
+		interval = "1m"
+	}
+	limit := 200
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, err := fmt.Sscanf(l, "%d", &limit); err != nil || n != 1 || limit < 1 || limit > 1000 {
+			limit = 200
+		}
+	}
+	bars, err := s.sc.GetKlines(interval, limit)
+	if err != nil {
+		jsonErr(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, bars)
 }
 
 func (s *Server) handleRefreshTP(w http.ResponseWriter, r *http.Request) {

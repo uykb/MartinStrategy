@@ -11,6 +11,16 @@ import (
 
 // ── Dashboard DTO types ──────────────────────────────────────────────
 
+// KlineBar is a single OHLCV bar for chart rendering.
+type KlineBar struct {
+	Time   int64   `json:"time"`   // open time in unix seconds
+	Open   float64 `json:"open"`
+	High   float64 `json:"high"`
+	Low    float64 `json:"low"`
+	Close  float64 `json:"close"`
+	Volume float64 `json:"volume"`
+}
+
 // DashboardState is the JSON snapshot pushed to the web dashboard via SSE.
 type DashboardState struct {
 	Running    bool          `json:"running"`
@@ -243,6 +253,29 @@ func (s *MartingaleStrategy) RefreshTP() error {
 	go s.updateTP()
 	return nil
 }
+
+// GetKlines fetches OHLCV candlestick data from the exchange for chart rendering.
+func (s *MartingaleStrategy) GetKlines(interval string, limit int) ([]KlineBar, error) {
+	klines, err := s.exchange.GetKlines(interval, limit)
+	if err != nil {
+		return nil, err
+	}
+	bars := make([]KlineBar, 0, len(klines))
+	for _, k := range klines {
+		bars = append(bars, KlineBar{
+			Time:   k.OpenTime / 1000, // Binance returns ms, JS expects seconds
+			Open:   pf(k.Open),
+			High:   pf(k.High),
+			Low:    pf(k.Low),
+			Close:  pf(k.Close),
+			Volume: pf(k.Volume),
+		})
+	}
+	return bars, nil
+}
+
+// pf is a shorthand for strconv.ParseFloat ignoring errors.
+func pf(s string) float64 { v, _ := strconv.ParseFloat(s, 64); return v }
 
 // countPendingSafetyOrders counts buy orders currently open on the exchange (safety orders not yet filled).
 func (s *MartingaleStrategy) countPendingSafetyOrders() int {

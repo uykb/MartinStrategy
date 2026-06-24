@@ -53,12 +53,16 @@ button.act:disabled{opacity:.45;cursor:not-allowed}
 .login-card input{width:100%;padding:12px;font-size:15px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--txt);margin:12px 0}
 .login-card button{width:100%;padding:12px;font-size:14px;font-weight:600;background:var(--grn);color:#fff;border:none;border-radius:6px;cursor:pointer}
 .login-err{color:var(--red);font-size:12px;margin-top:8px}
-.btn-sm{padding:3px 8px;border-radius:5px;border:1px solid var(--border);background:var(--bg);color:var(--txt);cursor:pointer;font-size:10px;font-weight:600}
+.chart-controls{display:flex;gap:6px;align-items:center}
+.chart-controls select{background:var(--panel);color:var(--txt);border:1px solid var(--border);border-radius:4px;padding:3px 8px;font-size:11px}
+.btn-sm{background:var(--panel);color:var(--txt);border:1px solid var(--border);border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer}
+.btn-sm:hover{border-color:var(--blu)}
 .ip-badge{font-size:10px;color:var(--blu);border:1px solid #388bfd44;background:#388bfd12;border-radius:4px;padding:2px 8px;cursor:pointer;user-select:all;white-space:nowrap}
 .ip-badge:hover{border-color:var(--blu)}
 @media(max-width:768px){.summary{grid-template-columns:1fr 1fr}.bottom2{grid-template-columns:1fr}.card .big{font-size:16px}.page{padding:12px}header{padding:8px 12px;flex-wrap:wrap}}
 @media(max-width:480px){.summary{grid-template-columns:1fr}}
 </style>
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
 <div id="loginGate">
@@ -102,6 +106,26 @@ button.act:disabled{opacity:.45;cursor:not-allowed}
     <div class="panel-body" id="posBody"><div class="empty">暂无持仓</div></div>
   </article>
 
+  <article class="panel">
+    <div class="panel-head">
+      <h2>K线图</h2>
+      <div class="chart-controls">
+        <select id="chartInterval">
+          <option value="1m">1分</option>
+          <option value="5m">5分</option>
+          <option value="15m">15分</option>
+          <option value="1h" selected>1小时</option>
+          <option value="4h">4小时</option>
+          <option value="1d">日线</option>
+        </select>
+        <button class="btn-sm" id="chartRefresh">刷新</button>
+      </div>
+    </div>
+    <div class="panel-body" style="padding:0">
+      <div id="chartContainer" style="height:400px;width:100%"></div>
+    </div>
+  </article>
+
   <div class="bottom2">
     <article class="panel">
       <div class="panel-head"><h2>挂单</h2><span class="muted" style="font-size:11px" id="ordersCount">0 单</span></div>
@@ -129,6 +153,7 @@ button.act:disabled{opacity:.45;cursor:not-allowed}
 const TOKEN_KEY='martin_dash_token';
 const $=id=>document.getElementById(id);
 let es=null;
+let chart=null, candleSeries=null, volSeries=null;
 
 function getToken(){return localStorage.getItem(TOKEN_KEY)||''}
 function setToken(t){localStorage.setItem(TOKEN_KEY,t.trim())}
@@ -162,6 +187,8 @@ function showLogin(err){
 function showApp(){
   $('loginGate').style.display='none';
   connectStream();
+  initChart();
+  loadKlines();
 }
 
 function connectStream(){
@@ -178,6 +205,39 @@ function connectStream(){
   };
 }
 
+function initChart(){
+  if(chart) return;
+  chart=LightweightCharts.createChart($('chartContainer'),{
+    layout:{background:{type:'solid',color:'#0d1117'},textColor:'#e6edf3'},
+    grid:{vertLines:{color:'rgba(48,54,61,0.5)'},horzLines:{color:'rgba(48,54,61,0.5)'}},
+    crosshair:{mode:0},
+    rightPriceScale:{borderColor:'#30363d'},
+    timeScale:{borderColor:'#30363d',timeVisible:true,secondsVisible:false}
+  });
+  candleSeries=chart.addCandlestickSeries({
+    upColor:'#2ea043',downColor:'#f85149',
+    borderUpColor:'#2ea043',borderDownColor:'#f85149',
+    wickUpColor:'#2ea043',wickDownColor:'#f85149'
+  });
+  volSeries=chart.addHistogramSeries({
+    color:'rgba(76,175,80,0.3)',
+    priceFormat:{type:'volume'},
+    priceScaleId:''
+  });
+  volSeries.priceScale().applyOptions({scaleMargins:{top:0.8,bottom:0}});
+  new ResizeObserver(()=>chart.applyOptions({width:$('chartContainer').clientWidth})).observe($('chartContainer'));
+}
+async function loadKlines(){
+  const interval=$('chartInterval')?.value||'1h';
+  const token=localStorage.getItem('martin_dash_token')||'';
+  const r=await fetch('/api/klines?interval='+interval+'&limit=200',{headers:{Authorization:'Bearer '+token}});
+  if(!r.ok) return;
+  const bars=await r.json();
+  if(!bars||!bars.length) return;
+  candleSeries.setData(bars.map(b=>({time:b.time,open:b.open,high:b.high,low:b.low,close:b.close})));
+  volSeries.setData(bars.map(b=>({time:b.time,value:b.volume,color:b.close>=b.open?'rgba(46,160,67,0.3)':'rgba(248,81,73,0.3)'})));
+  chart.timeScale().fitContent();
+}
 async function boot(){
   try{
     const h=await(await fetch('/api/health')).json();
@@ -202,6 +262,8 @@ $('loginBtn').onclick=async()=>{
 };
 $('tokenInput').onkeydown=e=>{if(e.key==='Enter')$('loginBtn').click()};
 $('logoutBtn').onclick=()=>{clearToken();showLogin('')};
+if($('chartInterval')) $('chartInterval').onchange=()=>loadKlines();
+if($('chartRefresh')) $('chartRefresh').onclick=()=>loadKlines();
 
 $('pauseToggleBtn').onclick=async()=>{
   const paused=$('pauseToggleBtn').textContent==='恢复';
