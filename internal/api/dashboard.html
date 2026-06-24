@@ -212,10 +212,20 @@ $('refreshTpBtn').onclick=async()=>{
   try{await apiPost('/api/refresh-tp');b.textContent='已提交'}catch(e){alert(e.message);b.textContent='刷新TP'}
   setTimeout(()=>{b.disabled=false;b.textContent='刷新TP'},2000);
 };
+let closeAllArmed=false,closeAllTimer=null;
 $('closeAllBtn').onclick=async()=>{
-  if(!confirm('确认全部平仓？将撤销所有挂单并市价平仓。'))return;
-  const b=$('closeAllBtn');b.disabled=true;b.textContent='平仓中…';
-  try{await apiPost('/api/close-all');b.textContent='已提交'}catch(e){alert(e.message)}
+  const b=$('closeAllBtn');
+  if(!closeAllArmed){
+    closeAllArmed=true;
+    b.textContent='再次点击确认平仓';
+    b.style.outline='2px solid var(--red)';
+    closeAllTimer=setTimeout(()=>{closeAllArmed=false;b.textContent='全部平仓';b.style.outline=''},3000);
+    return;
+  }
+  clearTimeout(closeAllTimer);
+  closeAllArmed=false;
+  b.disabled=true;b.textContent='平仓中…';b.style.outline='';
+  try{await apiPost('/api/close-all');b.textContent='指令已提交'}catch(e){alert(e.message)}
   setTimeout(()=>{b.disabled=false;b.textContent='全部平仓'},3000);
 };
 
@@ -247,8 +257,8 @@ function render(s){
   $('sumSymbol').textContent=s.symbol||'—';
 
   if(s.grid){
-    $('sumGrid').textContent=(s.grid.filledLevels||0)+'/'+(s.grid.maxLevels||0)+' 层';
-    $('sumGridSub').textContent=s.grid.placed?'网格已放置':'网格未放置';
+    $('sumGrid').textContent=(s.grid.placedLevels||0)+'/'+(s.grid.maxLevels||0)+' 层';
+    $('sumGridSub').textContent=s.grid.placed?((s.grid.filledLevels||0)+' 已成交'):'网格未放置';
   }
 
   $('sumOrders').textContent=(s.openOrders||[]).length+' 单';

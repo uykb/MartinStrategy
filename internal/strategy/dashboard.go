@@ -61,7 +61,8 @@ type OrderInfo struct {
 type GridInfo struct {
 	Placed       bool `json:"placed"`
 	MaxLevels    int  `json:"maxLevels"`
-	FilledLevels int  `json:"filledLevels"`
+	FilledLevels int  `json:"filledLevels"` // 已成交的安全单数量
+	PlacedLevels int  `json:"placedLevels"` // 已放置的安全单总数（已成交 + 挂单中）
 }
 
 // FillInfo records a recent order fill.
@@ -104,6 +105,7 @@ func (s *MartingaleStrategy) Snapshot() *DashboardState {
 			Placed:       s.gridPlaced,
 			MaxLevels:    s.cfg.MaxSafetyOrders,
 			FilledLevels: s.gridFilledCount,
+			PlacedLevels: s.gridFilledCount + s.countPendingSafetyOrders(),
 		},
 		Fills:     s.fills,
 		Alerts:    s.alerts,
@@ -240,6 +242,20 @@ func (s *MartingaleStrategy) RefreshTP() error {
 	s.addAlert("手动刷新止盈")
 	go s.updateTP()
 	return nil
+}
+
+// countPendingSafetyOrders counts buy orders currently open on the exchange (safety orders not yet filled).
+func (s *MartingaleStrategy) countPendingSafetyOrders() int {
+	if !s.gridPlaced {
+		return 0
+	}
+	count := 0
+	for _, o := range s.cachedOrders {
+		if o.Side == futures.SideTypeBuy {
+			count++
+		}
+	}
+	return count
 }
 
 // ── Fills & Alerts ring buffer ──────────────────────────────────────
