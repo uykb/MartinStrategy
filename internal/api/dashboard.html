@@ -111,12 +111,12 @@ button.act:disabled{opacity:.45;cursor:not-allowed}
       <h2>K线图</h2>
       <div class="chart-controls">
         <select id="chartInterval">
-          <option value="1m">1分</option>
-          <option value="5m">5分</option>
           <option value="15m">15分</option>
           <option value="1h" selected>1小时</option>
           <option value="4h">4小时</option>
           <option value="1d">日线</option>
+          <option value="1w">周线</option>
+          <option value="1M">月线</option>
         </select>
         <button class="btn-sm" id="chartRefresh">刷新</button>
       </div>
@@ -154,6 +154,7 @@ const TOKEN_KEY='martin_dash_token';
 const $=id=>document.getElementById(id);
 let es=null;
 let chart=null, candleSeries=null, volSeries=null;
+let priceLines=[];
 
 function getToken(){return localStorage.getItem(TOKEN_KEY)||''}
 function setToken(t){localStorage.setItem(TOKEN_KEY,t.trim())}
@@ -237,6 +238,34 @@ async function loadKlines(){
   candleSeries.setData(bars.map(b=>({time:b.time,open:b.open,high:b.high,low:b.low,close:b.close})));
   volSeries.setData(bars.map(b=>({time:b.time,value:b.volume,color:b.close>=b.open?'rgba(46,160,67,0.3)':'rgba(248,81,73,0.3)'})));
   chart.timeScale().fitContent();
+}
+
+function updatePriceLines(s){
+  if(!chart||!candleSeries)return;
+  priceLines.forEach(pl=>candleSeries.removePriceLine(pl));
+  priceLines=[];
+  if(s.position&&s.position.hasPosition&&s.position.entryPrice){
+    priceLines.push(candleSeries.createPriceLine({
+      price:s.position.entryPrice,color:'#58a6ff',lineStyle:2,
+      title:'入场 '+s.position.entryPrice,axisLabelVisible:true
+    }));
+  }
+  if(s.tpOrder&&s.tpOrder.price){
+    priceLines.push(candleSeries.createPriceLine({
+      price:s.tpOrder.price,color:'#2ea043',lineStyle:0,
+      title:'止盈 '+s.tpOrder.price,axisLabelVisible:true
+    }));
+  }
+  if(s.openOrders){
+    s.openOrders.forEach(o=>{
+      if(o.side==='BUY'&&o.price){
+        priceLines.push(candleSeries.createPriceLine({
+          price:o.price,color:'#d29922',lineStyle:1,
+          title:'安全单 '+o.price,axisLabelVisible:true
+        }));
+      }
+    });
+  }
 }
 async function boot(){
   try{
@@ -405,6 +434,7 @@ function render(s){
   }else{
     $('alertsBox').innerHTML='<div class="empty">暂无日志</div>';
   }
+  updatePriceLines(s);
 }
 
 function copyIP(){
