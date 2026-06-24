@@ -128,17 +128,6 @@ button.act:disabled{opacity:.45;cursor:not-allowed}
 
   <div class="bottom2">
     <article class="panel">
-      <div class="panel-head"><h2>挂单</h2><span class="muted" style="font-size:11px" id="ordersCount">0 单</span></div>
-      <div class="panel-body" id="ordersBody"><div class="empty">无挂单</div></div>
-    </article>
-    <article class="panel">
-      <div class="panel-head"><h2>止盈单</h2></div>
-      <div class="panel-body" id="tpBody"><div class="empty">无止盈单</div></div>
-    </article>
-  </div>
-
-  <div class="bottom2">
-    <article class="panel">
       <div class="panel-head"><h2>最近成交</h2><span class="muted" style="font-size:11px" id="fillsCount">0 笔</span></div>
       <div class="panel-body" id="fillsBody"><div class="empty">暂无成交</div></div>
     </article>
@@ -247,13 +236,13 @@ function updatePriceLines(s){
   if(s.position&&s.position.hasPosition&&s.position.entryPrice){
     priceLines.push(candleSeries.createPriceLine({
       price:s.position.entryPrice,color:'#58a6ff',lineStyle:2,
-      title:'入场 '+s.position.entryPrice,axisLabelVisible:true
+      title:'入场 '+fmtP(s.position.entryPrice),axisLabelVisible:true
     }));
   }
   if(s.tpOrder&&s.tpOrder.price){
     priceLines.push(candleSeries.createPriceLine({
       price:s.tpOrder.price,color:'#2ea043',lineStyle:0,
-      title:'止盈 '+s.tpOrder.price,axisLabelVisible:true
+      title:'止盈 '+fmtP(s.tpOrder.price)+' × '+fmtQ(s.tpOrder.quantity),axisLabelVisible:true
     }));
   }
   if(s.openOrders){
@@ -261,7 +250,7 @@ function updatePriceLines(s){
       if(o.side==='BUY'&&o.price){
         priceLines.push(candleSeries.createPriceLine({
           price:o.price,color:'#d29922',lineStyle:1,
-          title:'安全单 '+o.price,axisLabelVisible:true
+          title:'安全单 '+fmtP(o.price)+' × '+fmtQ(o.quantity),axisLabelVisible:true
         }));
       }
     });
@@ -325,6 +314,8 @@ function signed(n){const v=Number(n);if(!Number.isFinite(v))return'—';const s=
 function pnlCls(v){const n=Number(v);if(!Number.isFinite(n)||Math.abs(n)<0.005)return'';return n>0?'up':'down'}
 function fmtPrice(x){if(x==null||x===0)return'—';const n=Number(x);return n>=100?n.toFixed(2):n>=1?n.toFixed(4):n.toPrecision(4)}
 function fmtSize(n){const v=Number(n);if(!Number.isFinite(v))return'—';return v>=1000?v.toLocaleString('en-US',{maximumFractionDigits:2}):v>=1?v.toFixed(4):v.toPrecision(4)}
+function fmtP(x){if(x==null||x===0)return'—';const n=Number(x);return n>=100?n.toFixed(2):n>=1?n.toFixed(4):n>=0.01?n.toFixed(6):n.toFixed(8)}
+function fmtQ(x){if(x==null||x===0)return'—';const n=Number(x);return n>=1000?n.toFixed(2):n>=1?n.toFixed(4):n.toFixed(6)}
 
 function stateCls(s){
   const m={'IDLE':'state-idle','WAITING_ENTRY':'state-waiting','PLACING_GRID':'state-placing','IN_POSITION':'state-position','CLOSING':'state-closing'};
@@ -379,33 +370,37 @@ function render(s){
 
   // Open orders
   const orders=s.openOrders||[];
-  $('ordersCount').textContent=orders.length+' 单';
-  if(orders.length){
-    $('ordersBody').innerHTML='<table><thead><tr><th>订单ID</th><th>方向</th><th>类型</th><th>价格</th><th>数量</th><th>状态</th><th>只减仓</th></tr></thead><tbody>'+
-      orders.map(o=>
-        '<tr><td>'+o.orderId+'</td>'+
-        '<td><span class="pill '+o.side.toLowerCase()+'">'+o.side+'</span></td>'+
-        '<td>'+o.type+'</td>'+
-        '<td>'+fmtPrice(o.price)+'</td>'+
-        '<td>'+fmtSize(o.quantity)+'</td>'+
-        '<td>'+o.status+'</td>'+
-        '<td>'+(o.reduceOnly?'是':'—')+'</td></tr>'
-      ).join('')+'</tbody></table>';
-  }else{
-    $('ordersBody').innerHTML='<div class="empty">无挂单</div>';
+  if($('ordersCount')) $('ordersCount').textContent=orders.length+' 单';
+  if($('ordersBody')){
+    if(orders.length){
+      $('ordersBody').innerHTML='<table><thead><tr><th>订单ID</th><th>方向</th><th>类型</th><th>价格</th><th>数量</th><th>状态</th><th>只减仓</th></tr></thead><tbody>'+
+        orders.map(o=>
+          '<tr><td>'+o.orderId+'</td>'+
+          '<td><span class="pill '+o.side.toLowerCase()+'">'+o.side+'</span></td>'+
+          '<td>'+o.type+'</td>'+
+          '<td>'+fmtPrice(o.price)+'</td>'+
+          '<td>'+fmtSize(o.quantity)+'</td>'+
+          '<td>'+o.status+'</td>'+
+          '<td>'+(o.reduceOnly?'是':'—')+'</td></tr>'
+        ).join('')+'</tbody></table>';
+    }else{
+      $('ordersBody').innerHTML='<div class="empty">无挂单</div>';
+    }
   }
 
   // TP order
-  if(s.tpOrder){
-    const tp=s.tpOrder;
-    $('tpBody').innerHTML='<table><thead><tr><th>订单ID</th><th>方向</th><th>价格</th><th>数量</th><th>状态</th></tr></thead><tbody><tr>'+
-      '<td>'+tp.orderId+'</td>'+
-      '<td><span class="pill sell">SELL</span></td>'+
-      '<td>'+fmtPrice(tp.price)+'</td>'+
-      '<td>'+fmtSize(tp.quantity)+'</td>'+
-      '<td>'+tp.status+'</td></tr></tbody></table>';
-  }else{
-    $('tpBody').innerHTML='<div class="empty">无止盈单</div>';
+  if($('tpBody')){
+    if(s.tpOrder){
+      const tp=s.tpOrder;
+      $('tpBody').innerHTML='<table><thead><tr><th>订单ID</th><th>方向</th><th>价格</th><th>数量</th><th>状态</th></tr></thead><tbody><tr>'+
+        '<td>'+tp.orderId+'</td>'+
+        '<td><span class="pill sell">SELL</span></td>'+
+        '<td>'+fmtPrice(tp.price)+'</td>'+
+        '<td>'+fmtSize(tp.quantity)+'</td>'+
+        '<td>'+tp.status+'</td></tr></tbody></table>';
+    }else{
+      $('tpBody').innerHTML='<div class="empty">无止盈单</div>';
+    }
   }
 
   // Fills
