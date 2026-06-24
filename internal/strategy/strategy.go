@@ -69,9 +69,10 @@ type MartingaleStrategy struct {
 	gridFilledCount int   // 已成交的网格安全单数量
 
 	// Dashboard cache (periodically refreshed)
-	cachedBalance  float64
-	cachedPosition *futures.AccountPosition
-	cachedOrders   []*futures.Order
+	cachedBalance   float64
+	cachedPosition  *futures.AccountPosition
+	cachedOrders    []*futures.Order
+	cachedMarkPrice float64
 
 	// Dashboard history (ring buffers)
 	fills  []FillInfo

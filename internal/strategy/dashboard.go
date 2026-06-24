@@ -125,12 +125,12 @@ if s.cachedPosition != nil {
 				Side:         "LONG",
 				Size:         amt,
 				EntryPrice:   entry,
-				MarkPrice:    0, // AccountPosition has no MarkPrice; use 0 as placeholder
+				MarkPrice:    s.cachedMarkPrice,
 				Leverage:     lev,
 				UnrealizedPnl: upnl,
 			}
-			if entry > 0 {
-				st.Position.UnrealizedPct = (0 - entry) / entry * 100 // markPrice unavailable
+			if entry > 0 && s.cachedMarkPrice > 0 {
+				st.Position.UnrealizedPct = (s.cachedMarkPrice - entry) / entry * 100
 			}
 			st.Equity = st.Balance + upnl
 		}
@@ -303,11 +303,13 @@ func (s *MartingaleStrategy) refreshCache() {
 	balance, _ := s.exchange.GetBalance()
 	pos, _ := s.exchange.GetPosition()
 	orders, _ := s.exchange.GetOpenOrders()
+	markPrice, _ := s.exchange.GetMarkPrice()
 
 	s.mu.Lock()
 	s.cachedBalance = balance
 	s.cachedPosition = pos
 	s.cachedOrders = orders
+	s.cachedMarkPrice = markPrice
 	s.mu.Unlock()
 }
 

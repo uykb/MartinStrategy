@@ -297,6 +297,17 @@ func (bc *BinanceClient) GetOpenOrders() ([]*futures.Order, error) {
 		Do(context.Background())
 }
 
+// GetMarkPrice returns the current mark price for the configured symbol.
+func (bc *BinanceClient) GetMarkPrice() (float64, error) {
+	pi, err := bc.client.NewPremiumIndexService().
+		Symbol(bc.cfg.Symbol).
+		Do(context.Background())
+	if err != nil || len(pi) == 0 {
+		return 0, err
+	}
+	return strconv.ParseFloat(pi[0].MarkPrice, 64)
+}
+
 func (bc *BinanceClient) GetKlines(interval string, limit int) ([]*futures.Kline, error) {
 	return bc.client.NewKlinesService().
 		Symbol(bc.cfg.Symbol).
