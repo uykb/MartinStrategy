@@ -5,8 +5,7 @@ exchange:
   use_testnet: false
 
 strategy:
-  max_safety_orders: 8
-  atr_period: 14
+  max_safety_orders: 9
   base_ratio: 0.05
 
 api:

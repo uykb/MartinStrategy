@@ -663,85 +663,31 @@ func (s *MartingaleStrategy) placeGridOrders(execPrice float64) {
 		return
 	}
 
-	// Pre-calculate ATRs for different timeframes
-	// 8 levels: 30m, 1h, 2h, 4h, 8h, 12h, 1d, 1w
-	atr30m := s.fetchATR("30m")
-	atr1h := s.fetchATR("1h")
-	atr2h := s.fetchATR("2h")
-	atr4h := s.fetchATR("4h")
-	atr8h := s.fetchATR("8h")
-	atr12h := s.fetchATR("12h")
-	atr1d := s.fetchATR("1d")
-	atr1w := s.fetchATR("1w")
-
-	// If any ATR failed (0), fallback to entryPrice * 0.01
-	if atr30m == 0 {
-		atr30m = entryPrice * 0.01
-	}
-	if atr1h == 0 {
-		atr1h = entryPrice * 0.01
-	}
-	if atr2h == 0 {
-		atr2h = entryPrice * 0.01
-	}
-	if atr4h == 0 {
-		atr4h = entryPrice * 0.01
-	}
-	if atr8h == 0 {
-		atr8h = entryPrice * 0.01
-	}
-	if atr12h == 0 {
-		atr12h = entryPrice * 0.01
-	}
-	if atr1d == 0 {
-		atr1d = entryPrice * 0.01
-	}
-	if atr1w == 0 {
-		atr1w = entryPrice * 0.01
-	}
-
 	minNotional := s.calcMinNotional()
 
 	unitQty := utils.RoundUpToTickSize(minNotional/entryPrice, s.stepSize)
 
-	utils.Logger.Info("Placing Grid Orders", zap.Float64("Entry", entryPrice), zap.Float64("ATR30m", atr30m), zap.Float64("UnitQty", unitQty))
+	utils.Logger.Info("Placing Grid Orders", zap.Float64("Entry", entryPrice), zap.Float64("UnitQty", unitQty))
 
-	// Define Grid Distances (8 Levels)
-	// 1: 30m, 2: 1h, 3: 2h, 4: 4h, 5: 8h, 6: 12h, 7: 1D, 8: 1W
-	// Distances are relative to previous order
-	gridDistances := []float64{
-		atr30m,  // 1: 30分钟
-		atr1h,   // 2: 1小时
-		atr2h,   // 3: 2小时
-		atr4h,   // 4: 4小时
-		atr8h,   // 5: 8小时
-		atr12h,  // 6: 12小时
-		atr1d,   // 7: 日线
-		atr1w,   // 8: 周线
-	}
+	// Fixed percentage-based grid distances, relative to previous level
+	// Level 1-9: 1.0%, 1.0%, 1.0%, 1.1%, 2.1%, 2.2%, 4.5%, 4.8%, 7.7%
+	gridPcts := []float64{1.0, 1.0, 1.0, 1.1, 2.1, 2.2, 4.5, 4.8, 7.7}
 
 	currentPriceLevel := entryPrice
 
-	for i := 1; i <= s.cfg.MaxSafetyOrders; i++ {
-		// Calculate Price: Based on cumulative distance
-		stepDist := 0.0
-		if i-1 < len(gridDistances) {
-			stepDist = gridDistances[i-1]
-		} else {
-			// Fallback to last known distance if config has more orders than we defined
-			stepDist = gridDistances[len(gridDistances)-1]
-		}
-
-		price := currentPriceLevel - stepDist
-		currentPriceLevel = price // Update for next step (relative distance)
+	for i := 0; i < len(gridPcts); i++ {
+		// Price = previous level * (1 - pct/100)
+		stepPct := gridPcts[i]
+		price := currentPriceLevel * (1 - stepPct/100)
+		currentPriceLevel = price
 
 		// Ensure price precision
 		price = utils.RoundToTickSize(price, s.tickSize)
 		price = utils.ToFixed(price, s.pricePrecision) // Should align to tickSize really
 
-		// Fibonacci Volume: Qty = UnitQty * Fib(i) / 2
-		// Safety order multipliers: 0.5, 0.5, 1, 1.5, 2.5, 4, 6.5, 10.5...
-		volMult := s.getFibonacci(i)
+		// Fibonacci Volume: Qty = UnitQty * Fib(i+1) / 2
+		// Safety order multipliers: 0.5, 0.5, 1, 1.5, 2.5, 4, 6.5, 10.5, 17...
+		volMult := s.getFibonacci(i + 1)
 		qty := unitQty * volMult
 
 		// Ensure MinNotional (5 USDT) at the LIMIT PRICE
@@ -749,7 +695,7 @@ func (s *MartingaleStrategy) placeGridOrders(execPrice float64) {
 		// Since Price < EntryPrice, the original UnitQty (based on EntryPrice) might be insufficient.
 		if qty*price < minNotional {
 			utils.Logger.Info("Adjusting Qty to meet MinNotional",
-				zap.Int("index", i),
+				zap.Int("index", i+1),
 				zap.Float64("old_qty", qty),
 				zap.Float64("price", price),
 			)
@@ -761,10 +707,10 @@ func (s *MartingaleStrategy) placeGridOrders(execPrice float64) {
 		qty = utils.ToFixed(qty, s.quantityPrecision)
 
 		utils.Logger.Info("Placing Safety Order",
-			zap.Int("index", i),
+			zap.Int("index", i+1),
 			zap.Float64("price", price),
 			zap.Float64("qty", qty),
-			zap.Float64("dist_atr", stepDist),
+			zap.Float64("dist_pct", stepPct),
 		)
 
 		_, err := s.exchange.PlaceOrder(futures.SideTypeBuy, futures.OrderTypeLimit, qty, price, false)
@@ -876,28 +822,6 @@ func (s *MartingaleStrategy) updateTP() {
 	}
 	s.currentTPOrderID = resp.OrderID
 	s.mu.Unlock()
-}
-
-func (s *MartingaleStrategy) fetchATR(interval string) float64 {
-	utils.Logger.Info("fetchATR called", zap.String("interval", interval))
-	klines, err := s.exchange.GetKlines(interval, 50)
-	if err != nil {
-		utils.Logger.Error("Failed to get klines", zap.String("interval", interval), zap.Error(err))
-		return 0
-	}
-	utils.Logger.Info("fetchATR got klines", zap.String("interval", interval), zap.Int("count", len(klines)))
-
-	var highs, lows, closes []float64
-	for _, k := range klines {
-		h, _ := strconv.ParseFloat(k.High, 64)
-		l, _ := strconv.ParseFloat(k.Low, 64)
-		c, _ := strconv.ParseFloat(k.Close, 64)
-		highs = append(highs, h)
-		lows = append(lows, l)
-		closes = append(closes, c)
-	}
-
-	return utils.CalculateATR(highs, lows, closes, s.cfg.AtrPeriod)
 }
 
 // fetchVWAP calculates Volume Weighted Average Price using 15m candles over the last 24 hours.

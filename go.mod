@@ -4,7 +4,6 @@ go 1.25.4
 
 require (
 	github.com/adshao/go-binance/v2 v2.8.11
-	github.com/markcheno/go-talib v0.0.0-20250114000313-ec55a20c902f
 	github.com/spf13/viper v1.21.0
 	go.uber.org/zap v1.27.1
 )
