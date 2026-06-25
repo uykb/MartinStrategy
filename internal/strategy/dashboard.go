@@ -247,13 +247,6 @@ func (s *MartingaleStrategy) IsPaused() bool {
 	return s.paused
 }
 
-// RefreshTP re-calculates and updates the take-profit order based on current position and ATR.
-func (s *MartingaleStrategy) RefreshTP() error {
-	s.addAlert("手动刷新止盈")
-	go s.updateTP()
-	return nil
-}
-
 // GetKlines fetches OHLCV candlestick data from the exchange for chart rendering.
 func (s *MartingaleStrategy) GetKlines(interval string, limit int) ([]KlineBar, error) {
 	klines, err := s.exchange.GetKlines(interval, limit)

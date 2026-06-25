@@ -43,7 +43,6 @@ th{color:var(--mut);font-weight:600;font-size:10px;text-transform:uppercase;lett
 button.act{padding:8px 16px;border:none;border-radius:6px;font-weight:600;cursor:pointer;color:#fff;font-size:12px}
 button.act:disabled{opacity:.45;cursor:not-allowed}
 .start{background:var(--grn)}.stop{background:var(--red)}.ghost{background:transparent;border:1px solid var(--border);color:var(--txt)}
-.smart{background:linear-gradient(90deg,#7c5cff,#388bfd)}
 .pill{display:inline-block;padding:1px 6px;border-radius:8px;font-size:10px;font-weight:600}
 .pill.buy{background:#2ea04322;color:#3fb950}.pill.sell{background:#f8514922;color:#ff7b72}
 .alerts-box{max-height:200px;overflow-y:auto;font-size:11px}
@@ -89,7 +88,6 @@ button.act:disabled{opacity:.45;cursor:not-allowed}
 <main class="page">
   <div class="controls">
     <button class="act ghost" id="pauseToggleBtn">暂停</button>
-    <button class="act smart" id="refreshTpBtn">刷新TP</button>
     <button class="act stop" id="closeAllBtn">全部平仓</button>
   </div>
 
@@ -286,11 +284,6 @@ if($('chartRefresh')) $('chartRefresh').onclick=()=>loadKlines();
 $('pauseToggleBtn').onclick=async()=>{
   const paused=$('pauseToggleBtn').textContent==='恢复';
   try{await apiPost(paused?'/api/resume':'/api/pause')}catch(e){alert(e.message)}
-};
-$('refreshTpBtn').onclick=async()=>{
-  const b=$('refreshTpBtn');b.disabled=true;
-  try{await apiPost('/api/refresh-tp');b.textContent='已提交'}catch(e){alert(e.message);b.textContent='刷新TP'}
-  setTimeout(()=>{b.disabled=false;b.textContent='刷新TP'},2000);
 };
 let closeAllArmed=false,closeAllTimer=null;
 $('closeAllBtn').onclick=async()=>{

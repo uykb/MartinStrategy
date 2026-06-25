@@ -827,15 +827,14 @@ func (s *MartingaleStrategy) updateTP() {
 		s.mu.RUnlock()
 		return
 	}
-	// Use 30m ATR for TP
-	atr30m := s.fetchATR("30m")
-	if atr30m == 0 {
-		atr30m = avgPrice * 0.01
+	// VWAP + 0.80% for TP
+	vwap := s.fetchVWAP()
+	if vwap == 0 {
+		vwap = avgPrice // fallback: use entry price if VWAP unavailable
 	}
+	tpPrice := vwap * 1.008 // VWAP + 0.80%
 	oldTPID := s.currentTPOrderID
 	s.mu.RUnlock()
-
-	tpPrice := avgPrice + atr30m
 
 	// 3. Cancel old TP
 	if oldTPID != 0 {
@@ -899,6 +898,31 @@ func (s *MartingaleStrategy) fetchATR(interval string) float64 {
 	}
 
 	return utils.CalculateATR(highs, lows, closes, s.cfg.AtrPeriod)
+}
+
+// fetchVWAP calculates Volume Weighted Average Price using 15m candles over the last 24 hours.
+func (s *MartingaleStrategy) fetchVWAP() float64 {
+	klines, err := s.exchange.GetKlines("15m", 96) // 96 × 15m = 24h
+	if err != nil || len(klines) == 0 {
+		utils.Logger.Error("Failed to get klines for VWAP", zap.Error(err))
+		return 0
+	}
+	var totalPV, totalV float64
+	for _, k := range klines {
+		h, _ := strconv.ParseFloat(k.High, 64)
+		l, _ := strconv.ParseFloat(k.Low, 64)
+		c, _ := strconv.ParseFloat(k.Close, 64)
+		v, _ := strconv.ParseFloat(k.Volume, 64)
+		typical := (h + l + c) / 3
+		totalPV += typical * v
+		totalV += v
+	}
+	if totalV == 0 {
+		return 0
+	}
+	vwap := totalPV / totalV
+	utils.Logger.Info("VWAP calculated", zap.Float64("vwap", vwap), zap.Int("bars", len(klines)))
+	return vwap
 }
 
 func (s *MartingaleStrategy) calcMinNotional() float64 {
