@@ -152,7 +152,7 @@ function authQuery(){const t=getToken();return t?'?token='+encodeURIComponent(t)
 
 async function apiFetch(path,opts={}){
   const r=await fetch(path,{...opts,headers:{...authHeaders(),...(opts.headers||{})}});
-  if(r.status===401||r.status===403)throw new Error('AUTH');
+  if(r.status===401||r.status===403){clearToken();showLogin('会话已过期，请重新登录');throw new Error('AUTH')}
   return r;
 }
 async function apiPost(url,body){
@@ -162,7 +162,9 @@ async function apiPost(url,body){
   return j;
 }
 
-async function verifyToken(t){
+async function verifySession(){
+  const t=getToken();
+  if(!t)return false;
   const r=await fetch('/api/state',{headers:{Authorization:'Bearer '+t}});
   return r.ok;
 }
@@ -187,9 +189,11 @@ function connectStream(){
     $('dot').className='dot on';
     $('conn').textContent='已连接';
   };
-  es.onerror=()=>{
+es.onerror=()=>{
     $('dot').className='dot';
-    $('conn').textContent='重连中…';
+    $('conn').textContent='已断开';
+    // Check if session expired
+    if(es&&es.readyState===2)verifySession().then(ok=>{if(!ok)showLogin('会话已过期')});
   };
 }
 
@@ -261,20 +265,27 @@ async function boot(){
     else{$('ipBadge').textContent='未获取IP'}
     if(!h.auth_enabled){showApp();return}
     const t=getToken();
-    if(t && await verifyToken(t)){showApp();$('logoutBtn').style.display='';return}
+    if(t && await verifySession()){showApp();$('logoutBtn').style.display='';return}
     if(t)clearToken();
     showLogin('');
   }catch(e){showLogin('无法连接服务')}
 }
 
 $('loginBtn').onclick=async()=>{
-  const t=$('tokenInput').value.trim();
-  if(!t)return;
+  const raw=$('tokenInput').value.trim();
+  if(!raw)return;
   $('loginErr').textContent='';
-  setToken(t);
-  if(await verifyToken(t)){$('logoutBtn').style.display='';showApp();return}
-  clearToken();
-  $('loginErr').textContent='密码无效';
+  try{
+    const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:raw})});
+    const j=await r.json();
+    if(!r.ok)throw new Error(j.error||'登录失败');
+    setToken(j.session);
+    $('logoutBtn').style.display='';
+    showApp();
+  }catch(e){
+    clearToken();
+    $('loginErr').textContent='令牌无效';
+  }
 };
 $('tokenInput').onkeydown=e=>{if(e.key==='Enter')$('loginBtn').click()};
 $('logoutBtn').onclick=()=>{clearToken();showLogin('')};

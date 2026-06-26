@@ -2,11 +2,15 @@ package api
 
 import (
 	_ "embed"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -91,6 +95,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/state", s.withAuth(s.handleState))
 	mux.HandleFunc("/api/stream", s.handleStream)
+	mux.HandleFunc("/api/login", s.handleLogin)
 	mux.HandleFunc("/api/pause", s.withAuth(s.handlePause))
 	mux.HandleFunc("/api/resume", s.withAuth(s.handleResume))
 	mux.HandleFunc("/api/close-all", s.withAuth(s.handleCloseAll))
@@ -111,16 +116,66 @@ func (s *Server) Start() error {
 
 // ── Auth ────────────────────────────────────────────────────────────
 
+// sessionDuration controls how long a login session lasts before requiring re-auth.
+const sessionDuration = 24 * time.Hour
+
+// generateSessionToken creates a time-bounded HMAC-signed session token.
+// Format: base64url(expiry_unix).base64url(hmac_signature)
+func generateSessionToken(secret string) string {
+	expiry := time.Now().Add(sessionDuration).Unix()
+	expiryStr := strconv.FormatInt(expiry, 10)
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(expiryStr))
+	sig := mac.Sum(nil)
+	return base64.URLEncoding.EncodeToString([]byte(expiryStr)) +
+		"." + base64.URLEncoding.EncodeToString(sig)
+}
+
+// validateSessionToken verifies a session token's HMAC and checks expiry.
+func validateSessionToken(token, secret string) bool {
+	parts := strings.SplitN(token, ".", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	expiryBytes, err := base64.URLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return false
+	}
+	expiry, err := strconv.ParseInt(string(expiryBytes), 10, 64)
+	if err != nil {
+		return false
+	}
+	if time.Now().Unix() > expiry {
+		return false
+	}
+	sigBytes, err := base64.URLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return false
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(expiryBytes)
+	expected := mac.Sum(nil)
+	return hmac.Equal(sigBytes, expected)
+}
+
 func (s *Server) checkAuth(r *http.Request) bool {
 	if s.authToken == "" {
 		return true
 	}
-	h := r.Header.Get("Authorization")
-	if strings.HasPrefix(h, "Bearer ") {
-		return strings.TrimPrefix(h, "Bearer ") == s.authToken
+	token := ""
+	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
+		token = strings.TrimPrefix(h, "Bearer ")
+	} else if q := r.URL.Query().Get("token"); q != "" {
+		token = q
 	}
-	q := r.URL.Query().Get("token")
-	return q == s.authToken
+	if token == "" {
+		return false
+	}
+	// Accept either the raw auth_token or a valid session token
+	if token == s.authToken {
+		return true
+	}
+	return validateSessionToken(token, s.authToken)
 }
 
 func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
@@ -169,6 +224,26 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"auth_enabled": s.authToken != "",
 		"public_ip":    s.publicIP,
 	})
+}
+
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonErr(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Token == "" {
+		jsonErr(w, "missing token", http.StatusBadRequest)
+		return
+	}
+	if s.authToken != "" && body.Token != s.authToken {
+		jsonErr(w, "invalid token", http.StatusUnauthorized)
+		return
+	}
+	session := generateSessionToken(s.authToken)
+	writeJSON(w, map[string]string{"session": session})
 }
 
 func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
