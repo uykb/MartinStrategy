@@ -1,122 +1,130 @@
-# MartinStrategy
+# Martin
 
-基于 Go 语言的高性能马丁格尔策略交易机器人，采用 **事件驱动 + 有限状态机 (ED-FSM)** 架构，专为 Binance Futures（合约）设计。
+A high-performance Martingale grid trading bot for **Binance Futures**, built with Go. Features an **event-driven finite state machine (ED-FSM)** architecture, a real-time web dashboard with K-line charts, session-based authentication, and a fixed-percentage grid strategy optimized for maker fee savings.
 
-## 特性
+## Features
 
-- **事件驱动架构**: 基于 EventBus 的异步消息处理，解耦数据源与策略逻辑
-- **有限状态机**: 清晰的状态流转（IDLE → PLACING_GRID → IN_POSITION），避免逻辑混乱
-- **动态头仓**: 头仓金额根据账户总资产与配置比例（base_ratio）动态计算，随盈利自动放大
-- **八级 ATR 网格**: 网格间距采用 30m/1h/2h/4h/8h/12h/1d/1w 八级时间框架 ATR 动态计算
-- **Fibonacci 加仓**: 安全订单数量按 Fibonacci 序列（1,1,2,3,5,8,13,21）递增
-- **并发安全**: TryLock 防重入锁 + 状态标志双重保护，防止重复下单
-- **状态恢复**: 启动时自动同步交易所持仓与挂单状态，支持意外重启恢复
-- **自动重连**: WebSocket 断线指数退避重连，定时时间同步与心跳保活
-- **生产就绪**: 结构化日志、错误处理、监控计数器、优雅关闭
+- **Event-Driven Architecture**: Async message processing via EventBus decouples data sources from strategy logic
+- **Finite State Machine**: Clear state transitions (IDLE → WAITING_ENTRY → IN_POSITION) prevent logic conflicts
+- **Maker-Fee Entry**: Base orders use limit orders at +2 tick from market price, with a 10-second timeout fallback to market order — saves ~0.03% per entry
+- **9-Level Fixed Percentage Grid**: Grid safety orders placed at pre-defined percentage intervals (1.0%–7.7% relative depth), no ATR dependency
+- **Fibonacci Quantity Scaling**: Safety order sizes follow Fibonacci sequence scaled by 0.5: 0.5, 0.5, 1, 1.5, 2.5, 4, 6.5, 10.5, 17×
+- **VWAP + 0.80% Take Profit**: TP calculated as VWAP × 1.008 using 15-minute candle data from the last 24 hours
+- **ReduceOnly Protection**: TP orders use Binance's ReduceOnly flag to prevent accidental short positions
+- **Concurrency Safety**: TryLock guards, double-check flags, and failure rollback patterns prevent duplicate orders
+- **Self-Healing**: Automatic position state sync on startup; WebSocket reconnect with exponential backoff
+- **State Recovery**: On restart, preserves open orders if a position exists (across restarts)
+- **Web Dashboard**: Embedded single-file HTML dashboard with SSE real-time updates, K-line chart, grid visualization, and manual controls
+- **Session-Based Auth**: 24-hour expiring HMAC-signed session tokens, logged-out automatically on expiry
+- **Structured Logging**: Zap-based JSON logging for production observability
+- **Graceful Shutdown**: SIGINT/SIGTERM handler for clean teardown
 
-## 目录结构
+## Architecture
+
+```
+┌─────────────────────┐      Events       ┌──────────────────┐
+│   BinanceClient     │ ─────────────────▶│     EventBus     │
+│   (Exchange Layer)  │  (TICK, ORDER)    │    (Core Layer)   │
+│                     │                   │                  │
+│ • REST API          │                   │ • Pub/Sub        │
+│ • WebSocket Stream  │                   │ • Async Dispatch │
+│ • Auto-Reconnect    │                   │ • Ring Buffer    │
+│ • Price Polling     │                   └────────┬─────────┘
+└─────────────────────┘                            │
+                                          Subscribe │
+                                                     ▼
+                                            ┌──────────────────┐
+                                            │ MartingaleStrategy│
+                                            │  (Strategy/FSM)   │
+                                            │                  │
+                                            │ • State Machine   │
+                                            │ • Grid Placement  │
+                                            │ • TP Management   │
+                                            │ • Position Monitor│
+                                            └────────┬─────────┘
+                                                     │
+                                                     ▼
+                                            ┌──────────────────┐
+                                            │   Web Dashboard   │
+                                            │   (API + SSE)     │
+                                            │                  │
+                                            │ • REST API        │
+                                            │ • SSE Push        │
+                                            │ • K-line Chart    │
+                                            │ • Auth (Session)  │
+                                            └──────────────────┘
+```
+
+## Directory Structure
 
 ```
 .
 ├── cmd/
 │   └── bot/
-│       └── main.go              # 程序入口，初始化与生命周期管理
+│       └── main.go              # Entry point, lifecycle management
 ├── internal/
+│   ├── api/
+│   │   ├── server.go            # HTTP server, SSE, auth, routes
+│   │   └── dashboard.html       # Embedded single-file web dashboard
 │   ├── config/
-│   │   └── config.go            # 配置管理 (Viper: YAML + 环境变量)
+│   │   └── config.go            # Viper config (YAML + env vars)
 │   ├── core/
-│   │   └── event_bus.go         # 事件总线 (Pub/Sub 模式)
+│   │   └── event_bus.go         # Event bus (pub/sub pattern)
 │   ├── exchange/
-│   │   └── binance.go           # Binance Futures 客户端 (REST + WebSocket)
+│   │   └── binance.go           # Binance Futures client (REST + WebSocket)
 │   ├── strategy/
-│   │   └── strategy.go          # 马丁格尔策略核心 (FSM 状态机)
-│   ├── storage/
-│   │   └── storage.go           # 数据存储 (SQLite + Redis 分布式锁)
+│   │   ├── strategy.go          # Martingale strategy FSM
+│   │   └── dashboard.go         # Snapshot DTOs, control methods, cache
 │   └── utils/
-│       ├── indicators.go        # 技术指标 (ATR) 与数量/价格精度处理
-│       └── logger.go            # Zap 结构化日志
-├── config.yaml                  # 默认配置文件
-├── Dockerfile                   # 多阶段 Docker 构建
-├── docker-compose.yml           # Docker Compose 编排
-├── .github/workflows/
-│   └── docker-publish.yml       # CI/CD 自动构建与推送
-├── go.mod                       # Go 模块依赖
-├── README.md                    # 项目文档
-└── AGENTS.md                    # 开发者/Agent 指南
+│       ├── indicators.go        # Price/quantity precision helpers
+│       └── logger.go            # Zap structured logger
+├── config.yaml                  # Default configuration
+├── Dockerfile                   # Multi-stage Docker build
+├── docker-compose.yml           # Docker Compose
+├── go.mod / go.sum              # Go module dependencies
+├── README.md
+└── AGENTS.md                    # Developer/Agent guide
 ```
 
-## 架构概览
+## Quick Start
 
-```
-┌─────────────────────┐      Events       ┌──────────────────┐
-│   BinanceClient     │ ─────────────────▶│     EventBus     │
-│   (交易所层)         │  (TICK, ORDER)    │    (核心层)       │
-│                     │                   │                  │
-│ • REST API          │                   │ • Pub/Sub        │
-│ • WebSocket 用户流   │                   │ • 异步处理        │
-│ • 自动重连           │                   │ • 缓冲队列(1000)  │
-│ • 价格轮询           │                   └────────┬─────────┘
-└─────────────────────┘                            │
-                                          Subscribe │
-                                                    ▼
-                                           ┌──────────────────┐
-                                           │ MartingaleStrategy│
-                                           │   (策略层/FSM)    │
-                                           │                  │
-                                           │ • 状态机          │
-                                           │ • 网格下单        │
-                                           │ • 止盈管理        │
-                                           │ • 仓位监控        │
-                                           └────────┬─────────┘
-                                                    │
-                                           ┌────────┴─────────┐
-                                           │   Storage Layer   │
-                                           │   (存储层)         │
-                                           │                  │
-                                           │ • SQLite (GORM)  │
-                                           │ • Redis (分布式锁)│
-                                           └──────────────────┘
-```
-
-## 快速开始
-
-### 方式一: Docker Compose（推荐）
+### Docker Compose (Recommended)
 
 ```bash
-# 1. 创建配置文件
-cp config.yaml.example config.yaml   # 如无 example 文件，直接编辑 config.yaml
-
-# 2. 编辑配置（填入 API 密钥）
+# 1. Edit config.yaml with your API credentials
 vim config.yaml
 
-# 3. 启动服务
+# 2. Start
 docker-compose up -d
 
-# 4. 查看日志
+# 3. View logs
 docker-compose logs -f
 ```
 
-### 方式二: 本地运行
+### Local Development
 
 ```bash
-# 1. 安装依赖
+# 1. Install dependencies
 go mod tidy
 
-# 2. 编辑配置
+# 2. Edit config
 vim config.yaml
 
-# 3. 运行
+# 3. Run
 go run cmd/bot/main.go
+
+# 4. Open dashboard
+# http://localhost:8080 (if MARTIN_API_AUTH_TOKEN is set, you'll need to log in)
 ```
 
-### 方式三: 构建二进制
+### Build Binary
 
 ```bash
 go build -o bot cmd/bot/main.go
 ./bot
 ```
 
-## 配置说明
+## Configuration
 
 ### config.yaml
 
@@ -124,289 +132,228 @@ go build -o bot cmd/bot/main.go
 exchange:
   api_key: ""              # Binance API Key
   api_secret: ""           # Binance API Secret
-  symbol: "HYPEUSDT"       # 交易对
-  use_testnet: false       # 是否使用测试网
+  symbol: "HYPEUSDT"       # Trading pair
+  use_testnet: false       # Use Binance testnet
 
 strategy:
-  max_safety_orders: 8     # 最大加仓层数 (Fibonacci)
-  atr_period: 14           # ATR 周期
-  base_ratio: 0.1          # 头仓占总资产比例（动态计算）
+  max_safety_orders: 9     # Maximum grid levels
+  base_ratio: 0.05         # Base order = balance × base_ratio
 
-storage:
-  sqlite_path: "bot.db"    # SQLite 数据库路径
-  redis_addr: "localhost:6379"
-  redis_pass: ""
-  redis_db: 0
+api:
+  enabled: true            # Enable web dashboard
+  port: 8080               # Dashboard port
+  auth_token: ""           # Auth token (leave empty for no auth)
 
 log:
-  level: "info"            # 日志级别: debug, info, warn, error
+  level: "info"            # Log level: debug, info, warn, error
 ```
 
-### 环境变量
+### Environment Variables
 
-支持通过环境变量覆盖配置，前缀为 `MARTIN_`：
+All config fields can be overridden with `MARTIN_`-prefixed env vars:
 
 ```bash
 export MARTIN_EXCHANGE_API_KEY="your_api_key"
 export MARTIN_EXCHANGE_API_SECRET="your_api_secret"
-export MARTIN_EXCHANGE_SYMBOL="BTCUSDT"
-export MARTIN_EXCHANGE_USE_TESTNET="true"
-export MARTIN_STRATEGY_MAX_SAFETY_ORDERS="8"
-export MARTIN_STRATEGY_BASE_RATIO="0.1"
-export MARTIN_LOG_LEVEL="debug"
+export MARTIN_EXCHANGE_SYMBOL="HYPEUSDT"
+export MARTIN_EXCHANGE_USE_TESTNET="false"
+export MARTIN_STRATEGY_MAX_SAFETY_ORDERS="9"
+export MARTIN_STRATEGY_BASE_RATIO="0.05"
+export MARTIN_API_ENABLED="true"
+export MARTIN_API_PORT="8080"
+export MARTIN_API_AUTH_TOKEN="your_auth_token"
+export MARTIN_LOG_LEVEL="info"
 ```
 
-## 策略详解
+## Strategy Details
 
-### 状态机流转
+### State Machine
 
 ```
-┌──────────┐     Tick 事件      ┌───────────────┐
-│  IDLE    │ ──────────────────▶│ PLACING_GRID  │
-│ (空仓等待) │                    │  (等待底仓成交)  │
-└──────────┘                    └───────┬───────┘
-     ▲                                  │
-     │                                  │ 检测到持仓
+┌──────────┐    Tick Event     ┌──────────────────┐
+│  IDLE    │ ────────────────▶│  WAITING_ENTRY    │
+│ (No Pos) │                   │ (Limit Order Sent)│
+└──────────┘                   └────────┬─────────┘
+     ▲                                  │ Order Fills
      │                                  ▼
-     │                          ┌───────────────┐
-     │     TP 成交 (SELL)       │ IN_POSITION   │
-     └─────────────────────────│   (持仓中)     │
-                               │               │
-                               │  安全单成交    │
-                               ▼               │
-                         更新止盈单 (TP)        │
-                               ▲               │
-                               └───────────────┘
+     │                         ┌──────────────────┐
+     │    TP Filled (SELL)     │  IN_POSITION      │
+     └────────────────────────│  (Holding Position)│
+                               │                   │
+                               │ Safety Order Fill │
+                               │     → Update TP   │
+                               └──────────────────┘
 ```
 
-| 状态 | 说明 | 触发进入 | 触发离开 |
-|------|------|----------|----------|
-| `IDLE` | 空仓等待，可接收新 Tick | 启动/TP 成交/手动平仓 | 收到 Tick 事件 |
-| `PLACING_GRID` | 底仓已下，等待成交 | 市价买入底仓后 | 检测到持仓 |
-| `IN_POSITION` | 持有仓位，网格单活跃 | 底仓成交后 | 止盈成交/手动平仓 |
-| `CLOSING` | 定义但未主动使用 | - | - |
+| State | Description | Entry Trigger | Exit Trigger |
+|-------|-------------|---------------|-------------|
+| `IDLE` | No position, waiting for tick | Startup / TP fill / manual close | Tick received |
+| `WAITING_ENTRY` | Base limit order placed, waiting for fill | `enterLong()` | Order fills |
+| `IN_POSITION` | Position active, grid orders placed | Base order fills | TP fill / manual close |
+| `PLACING_GRID` | (Transient) Grid orders being placed | Order fill detected | Grid placed |
 
-### 交易流程
+### Trading Flow
 
-1. **开仓 (enterLong)**: IDLE 状态收到 Tick 事件，查询账户 USDT 余额，按 `余额 × base_ratio` 动态计算头仓金额（不低于 6 USDT），市价买入
-2. **等待成交 (waitForFillAndPlaceGrid)**: 每 2 秒轮询检查持仓，最多等待 30 秒，检测到持仓后触发网格下单
-3. **网格下单 (placeGridOrders)**: 根据八级时间框架 ATR 计算间距，Fibonacci 序列计算数量，放置限价安全单
-4. **止盈管理 (updateTP)**: 基于 30 分钟 ATR 计算止盈价格，均价 + ATR(30m) 放置限价卖出单
-5. **加仓处理**: 安全单成交后，重新计算均价与止盈价格，更新 TP 订单
-6. **止盈退出**: TP 订单成交后，取消所有挂单，状态重置为 IDLE，准备下一轮
+1. **Entry (`enterLong`)**: IDLE state receives a tick event → fetches USDT balance → calculates base quantity = `balance × base_ratio` → places a **limit order** at `currentPrice + 2×tickSize` (maker fee 0.02%) → sets state to `WAITING_ENTRY`
+2. **Timeout Fallback**: If the limit order doesn't fill within 10 seconds, cancels it and falls back to a **market order** (taker fee 0.05%)
+3. **Grid Placement (`placeGridOrders`)**: After entry fills, places 9 limit buy safety orders at fixed percentage intervals below entry price, using Fibonacci-scaled quantities
+4. **TP Management (`updateTP`)**: Calculates VWAP from 15-minute candles (24h window), sets TP at `VWAP × 1.008`. Updated after each safety order fill
+5. **Exit**: When TP fills, cancels all remaining orders, resets state to IDLE
 
-### 网格间距设计
+### Grid Levels
 
-网格采用**八级时间框架 ATR**设计，每层直接使用对应周期的 ATR 值作为间距：
+Prices are calculated relative to the previous level:
 
-| 层级 | 间距计算 | 时间框架 | 说明 |
-|------|----------|----------|------|
-| 1 | ATR(30m) | 30 分钟 | 首层保护 |
-| 2 | ATR(1h) | 1 小时 | 第二层保护 |
-| 3 | ATR(2h) | 2 小时 | 中短期保护 |
-| 4 | ATR(4h) | 4 小时 | 中期保护 |
-| 5 | ATR(8h) | 8 小时 | 中长期保护 |
-| 6 | ATR(12h) | 12 小时 | 长期保护 |
-| 7 | ATR(1d) | 日线 | 长期保护 |
-| 8 | ATR(1w) | 周线 | 最深层保护 |
+| Level | Depth from Previous | Fibonacci Multiplier |
+|-------|---------------------|---------------------|
+| L0 (Base) | — | — |
+| L1 | -1.0% | 0.5× |
+| L2 | -1.0% | 0.5× |
+| L3 | -1.0% | 1× |
+| L4 | -1.1% | 1.5× |
+| L5 | -2.1% | 2.5× |
+| L6 | -2.2% | 4× |
+| L7 | -4.5% | 6.5× |
+| L8 | -4.8% | 10.5× |
+| L9 | -7.7% | 17× |
 
-> 间距为**相对上一层**的距离，非绝对距离。ATR 获取失败时回退至入场价 × 1%。
+- L9 price ≈ 0.771 × entry price (approximately -22.9% max depth)
+- Base quantity (unit) = `minNotional / entryPrice`, where `minNotional = balance × base_ratio`
+- Safety order quantity = `unitQty × FibonacciMultiplier`
+- Minimum order value enforced at 6 USDT
 
-### Fibonacci 加仓数量
+### Take Profit
 
-| 层级 | Fibonacci 倍数 | 数量（假设 unit=1） | 累计倍数 |
-|------|----------------|---------------------|----------|
-| 1 | 1 | 1 | 1 |
-| 2 | 1 | 1 | 2 |
-| 3 | 2 | 2 | 4 |
-| 4 | 3 | 3 | 7 |
-| 5 | 5 | 5 | 12 |
-| 6 | 8 | 8 | 20 |
-| 7 | 13 | 13 | 33 |
-| 8 | 21 | 21 | 54 |
+- **Calculation**: `TP = VWAP × 1.008` (VWAP from last 24h of 15-minute candles)
+- **Quantity**: Full position close
+- **Update**: Recalculated after each safety order fill
+- **Protection**: TP orders use `ReduceOnly=true` to prevent accidental short positions
 
-> 每层数量 = unitQty × Fibonacci(n)，unitQty 由动态头仓金额（余额 × base_ratio）/ 入场价计算并向上取整至 stepSize。
+## Web Dashboard
 
-### 止盈策略
+The embedded dashboard provides real-time trading visibility:
 
-- **计算基准**: 当前持仓均价（EntryPrice）
-- **止盈价格**: avgPrice + ATR(30m)
-- **止盈数量**: 全仓平出
-- **更新时机**: 每次安全单成交后重新计算并替换 TP 订单
+| Feature | Description |
+|---------|-------------|
+| **Real-time State** | SSE push of balance, position, orders, fills, alerts (5s refresh) |
+| **K-Line Chart** | TradingView Lightweight Charts with candlestick + volume. Intervals: 15m, 1h, 4h, 1d, 1w, 1M |
+| **Price Lines** | Entry price (blue dashed), TP price + qty (green solid), grid safety orders + qty (amber dotted) |
+| **Controls** | Pause/Resume (toggle), Close All (two-step confirmation), Refresh TP |
+| **Connection Info** | Server public IP display (copy to clipboard) for Binance API whitelist |
+| **Auth** | Session-based login with 24h auto-expiry |
 
-## 并发安全机制
+### API Endpoints
 
-### 1. TryLock 防重入锁
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/` | GET | Dashboard HTML |
+| `/api/health` | GET | Server health + public IP |
+| `/api/state` | GET | Current strategy snapshot |
+| `/api/stream` | GET | SSE event stream (real-time push) |
+| `/api/login` | POST | Authenticate, receive session token |
+| `/api/pause` | POST | Pause strategy (blocks new entries) |
+| `/api/resume` | POST | Resume strategy |
+| `/api/close-all` | POST | Emergency close: cancel all orders + market exit |
+| `/api/klines` | GET | OHLCV data for chart (`?interval=1h&limit=200`) |
+
+All endpoints (except `/api/health`, `/api/login`, `/`, `/api/stream`) require `Authorization: Bearer <session_token>` header.
+
+### Authentication Flow
+
+```
+User enters password
+         │
+         ▼
+POST /api/login  {"token": "password"}
+         │
+         ▼
+Server generates HMAC-signed session token (24h expiry)
+         │
+         ▼
+Browser stores session token in localStorage
+         │
+         ▼
+All requests → Authorization: Bearer <session_token>
+         │
+         └── Expired (24h) → 401 → Auto-redirect to login
+```
+
+## Concurrency Safety
+
+### 1. TryLock Guards
 
 ```go
-// placeGridOrders 防并发
+// Grid placement (blocking-safe)
 if !s.gridMu.TryLock() {
-    s.gridSkipCount++  // 监控计数
+    s.gridSkipCount++  // monitoring counter
     return
 }
 defer s.gridMu.Unlock()
 
-// updateTP 防并发
+// TP update (blocking-safe)
 if !s.tpMu.TryLock() {
-    s.tpSkipCount++    // 监控计数
+    s.tpSkipCount++
     return
 }
 defer s.tpMu.Unlock()
 ```
 
-### 2. 状态标志双重检查
+### 2. Double-Check Flags
 
 ```go
-// 第一重：无锁快速检查
+// Fast path: lock-free check
 s.mu.RLock()
-if s.gridPlaced {
-    s.mu.RUnlock()
-    return
-}
+if s.gridPlaced { s.mu.RUnlock(); return }
 s.mu.RUnlock()
 
-// 第二重：获取锁后再次检查
-if !s.gridMu.TryLock() { ... }
+// Lock path: re-check after acquiring lock
+s.gridMu.Lock()  // or TryLock
 s.mu.RLock()
-if s.gridPlaced { ... }  // 防止等待锁期间被其他 goroutine 设置
+if s.gridPlaced { ... }  // protected against races
 s.mu.RUnlock()
 ```
 
-### 3. 状态原子操作与失败回滚
+### 3. Failure Rollback
 
 ```go
-// 状态检查与变更（锁内）
 s.mu.Lock()
-if s.currentState != StateIdle {
-    s.mu.Unlock()
-    return
-}
-s.currentState = StatePlacingGrid
+s.currentState = StateWaitingEntry
 s.mu.Unlock()
 
-// 网络请求（锁外执行，避免阻塞）
 if err := s.enterLong(price); err != nil {
     s.mu.Lock()
-    s.currentState = StateIdle  // 失败回滚
+    s.currentState = StateIdle  // Rollback on failure
     s.mu.Unlock()
 }
 ```
 
-### 4. 执行价格优化
+## Dependencies
 
-从订单成交事件直接获取执行价格，避免 Position API 的竞态条件：
+| Component | Library | Version |
+|-----------|---------|---------|
+| Language | Go | 1.25+ |
+| Exchange API | go-binance (futures) | v2.8.11 |
+| Configuration | Viper | v1.21.0 |
+| Logging | Zap | v1.27.1 |
+| Charting | Lightweight Charts (CDN) | v4.2.0 |
 
-```go
-// 从 WebSocket 事件获取（推荐）
-execPrice, _ := strconv.ParseFloat(order.AveragePrice, 64)
-go s.placeGridOrders(execPrice)
-```
-
-## 核心模块说明
-
-### EventBus (internal/core/event_bus.go)
-
-| 组件 | 说明 |
-|------|------|
-| 事件类型 | TICK, ORDER_UPDATE, POSITION_UPDATE, LOG, START, STOP |
-| 队列容量 | 1000（满时丢弃事件） |
-| 处理方式 | 异步 goroutine 并行处理 |
-| 线程安全 | sync.RWMutex 保护 handler 映射 |
-
-### BinanceClient (internal/exchange/binance.go)
-
-| 功能 | 说明 |
-|------|------|
-| WebSocket 用户流 | 实时订单更新与账户更新 |
-| 自动重连 | 指数退避（最多 5 次重试） |
-| 心跳保活 | 每 15 分钟保活（Binance 要求 60 分钟内） |
-| 时间同步 | 启动时 + 每 5 分钟定时同步 |
-| 价格轮询 | 每 10 秒 REST API 轮询（发布 TICK 事件） |
-| REST API | PlaceOrder, CancelOrder, CancelAllOrders, GetPosition, GetOpenOrders, GetKlines, GetExchangeInfo, GetBalance |
-
-### MartingaleStrategy (internal/strategy/strategy.go)
-
-| 组件 | 说明 |
-|------|------|
-| 动态头仓 | `余额 × base_ratio`，不低于 MinOrderValue (6.0 USDT) |
-| 网格层级 | 最多 8 层（可配置） |
-| 仓位监控 | 每 5 秒检查一次（检测手动平仓） |
-| 状态同步 | 启动时自动恢复持仓与挂单状态 |
-| API 限频保护 | 网格下单间隔 200ms |
-
-### Storage (internal/storage/storage.go)
-
-| 组件 | 说明 |
-|------|------|
-| SQLite | GORM ORM，自动迁移，存储订单历史与机器人状态 |
-| Redis | SetNX 分布式锁（TTL 过期） |
-
-### Utils (internal/utils/)
-
-| 函数 | 说明 |
-|------|------|
-| CalculateATR | 基于 go-talib 计算平均真实波幅 |
-| ToFixed | float64 固定精度舍入 |
-| RoundUpToTickSize | 向上取整至最小变动价位（用于数量） |
-| RoundToTickSize | 四舍五入至最小变动价位（用于价格） |
-
-## 监控指标
-
-### 日志关键字段
-
-| 字段 | 说明 |
-|------|------|
-| `balance` | 账户 USDT 余额 |
-| `ratio` | 头仓比例 (base_ratio) |
-| `notional` | 动态计算的头仓金额 |
-| `skip_count` | 因并发冲突跳过的次数 |
-| `entryPrice` | 入场价格 |
-| `ATR30m` | 30 分钟 ATR 值 |
-| `UnitQty` | 单位数量 |
-| `state` | 当前状态机状态 |
-| `gridPlaced` | 网格是否已放置标志 |
-
-### 示例日志
-
-```json
-{"level":"info","msg":"Dynamic MinNotional","balance":1000,"ratio":0.08,"notional":80}
-{"level":"info","msg":"Tick received","price":39.638,"state":"IDLE","gridPlaced":false}
-{"level":"info","msg":"Order Update Received","id":123456,"status":"FILLED","type":"LIMIT"}
-{"level":"info","msg":"Using execution price from order event","entryPrice":39.638}
-{"level":"warn","msg":"placeGridOrders skipped: already running","skip_count":5}
-{"level":"warn","msg":"updateTP skipped: already running","skip_count":12}
-```
-
-## 技术栈
-
-| 组件 | 技术 | 版本 |
-|------|------|------|
-| 语言 | Go | 1.25+ |
-| 交易所 | Binance Futures (go-binance) | v2.8.11 |
-| 存储 | SQLite (glebarez/sqlite) | v1.11.0 |
-| 缓存/锁 | Redis (go-redis) | v9.18.0 |
-| 配置 | Viper | v1.21.0 |
-| 日志 | Zap | v1.27.1 |
-| ORM | GORM | v1.31.1 |
-| 技术指标 | go-talib | - |
-
-## 开发
+## Development
 
 ```bash
-# 运行测试
-go test ./...
-
-# 运行单个测试
-go test -v -run TestCalculateATR ./internal/utils/
-
-# 构建
+# Build
 go build -o bot cmd/bot/main.go
 
-# 代码检查
+# Run
+go run cmd/bot/main.go
+
+# Test
+go test ./...
+
+# Code checks
 go vet ./...
 go fmt ./...
 
-# 依赖管理
+# Dependencies
 go mod tidy
 go mod download
 
@@ -415,21 +362,40 @@ docker-compose build
 docker-compose up -d
 ```
 
-## CI/CD
+## Key Constants
 
-项目使用 GitHub Actions 自动构建并推送镜像到 GitHub Container Registry：
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `MinOrderValue` | 6.0 USDT | Minimum order value for Binance Futures |
+| `EntryTimeout` | 10s | Timeout for limit order → market fallback |
+| Price polling | 10s | Tick event interval |
+| Position monitor | 5s | Manual close detection interval |
+| Grid order spacing | 200ms | API rate limit protection |
+| Session duration | 24h | Auth session lifetime |
+| User stream keepalive | 15min | Binance WebSocket heartbeat |
+| Server time sync | 5min | Periodic clock sync |
+| WS reconnect retries | 5 | Exponential backoff |
+| Event queue buffer | 1000 | Max pending events |
 
-- **触发条件**: push/PR 到 main 分支
-- **构建平台**: linux/amd64, linux/arm64
-- **镜像地址**: `ghcr.io/<owner>/martinstrategy:latest`
+## Log Examples
 
-## 风险提示
+```json
+{"level":"info","msg":"Starting MartinStrategy Bot","symbol":"HYPEUSDT"}
+{"level":"info","msg":"Server time synced","offset_ms":110}
+{"level":"info","msg":"容器公网 IP（请加入 Binance API 白名单）","ip":"51.195.62.118"}
+{"level":"info","msg":"Dynamic MinNotional","balance":1000,"ratio":0.05,"notional":50}
+{"level":"info","msg":"Tick received","price":39.638,"state":"IDLE","gridPlaced":false}
+{"level":"info","msg":"Placing Safety Order","index":1,"price":39.24,"qty":1.5,"dist_pct":1.0}
+{"level":"info","msg":"VWAP calculated","vwap":39.15,"bars":96}
+{"level":"warn","msg":"placeGridOrders skipped: already running","skip_count":5}
+```
 
-- 马丁格尔策略在单边下跌行情中风险极高，可能导致重大亏损
-- 建议设置止损或限制最大持仓层数
-- 请确保 API Key 具有合约交易权限
-- 强烈建议先在测试网（use_testnet: true）验证策略
-- 本软件仅供学习研究，不构成投资建议，使用风险自负
+## Risk Disclaimer
+
+- Martingale strategies carry **extreme risk** in prolonged bearish conditions
+- Always test with `use_testnet: true` before real funds
+- Ensure your Binance API key has Futures trading permissions and whitelist the server IP
+- This software is for educational purposes. Use at your own risk.
 
 ## License
 
