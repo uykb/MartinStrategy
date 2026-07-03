@@ -43,8 +43,6 @@ type MartingaleStrategy struct {
 
 	mu               sync.RWMutex
 	currentState     State
-	position         *futures.AccountPosition
-	activeOrders     map[int64]*futures.Order // Local cache of active orders
 	currentTPOrderID int64
 	baseOrderID      int64 // 首仓挂单 ID，用于超时取消
 
@@ -89,7 +87,6 @@ func NewMartingaleStrategy(cfg *config.StrategyConfig, ex *exchange.BinanceClien
 		exchange:     ex,
 		bus:          bus,
 		currentState: StateIdle,
-		activeOrders: make(map[int64]*futures.Order),
 		waitStopCh:   make(chan struct{}),
 	}
 }
@@ -224,7 +221,6 @@ func (s *MartingaleStrategy) syncState() {
 		utils.Logger.Error("Failed to sync position", zap.Error(err))
 		return
 	}
-	s.position = pos
 
 	amt, _ := strconv.ParseFloat(pos.PositionAmt, 64)
 	if math.Abs(amt) > 0 {
@@ -277,9 +273,8 @@ func (s *MartingaleStrategy) syncState() {
 
 	} else {
 		s.currentState = StateIdle
-		s.gridPlaced = false     // 重置网格标志，准备下一轮
-		s.currentTPOrderID = 0   // 重置 TP 订单 ID
-		s.activeOrders = make(map[int64]*futures.Order) // 清空订单缓存
+		s.gridPlaced = false
+		s.currentTPOrderID = 0
 		utils.Logger.Info("State Synced (No Position)", zap.String("state", string(s.currentState)))
 	}
 }
