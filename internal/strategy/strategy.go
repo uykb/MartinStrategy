@@ -805,18 +805,23 @@ func (s *MartingaleStrategy) updateTP() {
 		s.mu.RUnlock()
 		return
 	}
-	// VWAP + 0.80% for TP
+	// Entry + 0.80% for TP; also consider VWAP if it yields a higher price
 	vwap := s.fetchVWAP()
-	if vwap == 0 {
-		vwap = avgPrice // fallback: use entry price if VWAP unavailable
+	tpPrice := avgPrice * 1.008
+	if vwap > 0 {
+		vwapTP := vwap * 1.008
+		if vwapTP > tpPrice {
+			tpPrice = vwapTP
+		}
 	}
-	tpPrice := vwap * 1.008 // VWAP + 0.80%
-	// Safety: TP must be >= average entry price (never lock in a loss)
-	if tpPrice < avgPrice {
-		utils.Logger.Warn("TP below avg price, capping to break-even",
-			zap.Float64("vwap_tp", tpPrice),
-			zap.Float64("avg_price", avgPrice))
-		tpPrice = avgPrice
+	// Safety: minimum 0.5% above entry (avoids break-even fills during volatility)
+	minTP := avgPrice * 1.005
+	if tpPrice < minTP {
+		utils.Logger.Warn("TP too close to entry, using minimum spread",
+			zap.Float64("calc_tp", tpPrice),
+			zap.Float64("avg_price", avgPrice),
+			zap.Float64("vwap", vwap))
+		tpPrice = minTP
 	}
 	oldTPID := s.currentTPOrderID
 	s.mu.RUnlock()
@@ -863,9 +868,9 @@ func (s *MartingaleStrategy) updateTP() {
 	s.mu.Unlock()
 }
 
-// fetchVWAP calculates Volume Weighted Average Price using 15m candles over the last 24 hours.
+// fetchVWAP calculates Volume Weighted Average Price using 15m candles over the last 4 hours.
 func (s *MartingaleStrategy) fetchVWAP() float64 {
-	klines, err := s.exchange.GetKlines("15m", 96) // 96 × 15m = 24h
+	klines, err := s.exchange.GetKlines("15m", 16) // 16 × 15m = 4h
 	if err != nil || len(klines) == 0 {
 		utils.Logger.Error("Failed to get klines for VWAP", zap.Error(err))
 		return 0
