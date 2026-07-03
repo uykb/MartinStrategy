@@ -30,6 +30,9 @@ const (
 // EntryTimeout 首仓挂单超时时间，超时后回退为市价单
 const EntryTimeout = 10 * time.Second
 
+// TPCooldown 止盈成交后冷却期，防止快速重入导致反复开平仓
+const TPCooldown = 30 * time.Second
+
 // MinOrderValue is the minimum order value in USDT for Binance Futures
 const MinOrderValue = 6.0
 
@@ -67,6 +70,7 @@ type MartingaleStrategy struct {
 	gridPlaced      bool  // 标志网格是否已放置，防止重复
 	paused          bool  // 策略暂停标志
 	gridFilledCount int   // 已成交的网格安全单数量
+	lastTPFill      time.Time // 上次止盈成交时间，用于冷却期
 
 	// Dashboard cache (periodically refreshed)
 	cachedBalance   float64
@@ -141,7 +145,9 @@ func (s *MartingaleStrategy) monitorPositionStatus() {
 			s.mu.Unlock()
 
 			// Cancel any remaining orders
-			s.exchange.CancelAllOrders()
+			if err := s.exchange.CancelAllOrders(); err != nil {
+				utils.Logger.Error("monitorPositionStatus: CancelAllOrders failed", zap.Error(err))
+			}
 		}
 	}
 }
@@ -291,6 +297,13 @@ func (s *MartingaleStrategy) handleTick(ctx context.Context, event core.Event) e
 	// 原子状态检查
 	s.mu.Lock()
 	if s.currentState != StateIdle || s.paused {
+		s.mu.Unlock()
+		return nil
+	}
+	// TP 成交冷却期：防止快速重入导致反复开平仓
+	if time.Since(s.lastTPFill) < TPCooldown {
+		utils.Logger.Info("Tick received during TP cooldown, skipping",
+			zap.Duration("since_tp", time.Since(s.lastTPFill)))
 		s.mu.Unlock()
 		return nil
 	}
@@ -444,16 +457,27 @@ func (s *MartingaleStrategy) handleOrderUpdate(ctx context.Context, event core.E
 			s.addFill("SELL", "TP", sellFilledPrice, sellFilledQty)
 
 			s.mu.Lock()
-	s.currentState = StateIdle
-	s.currentTPOrderID = 0
-	s.baseOrderID = 0       // 重置首仓挂单 ID
-	s.gridPlaced = false     // 重置网格标志，准备下一轮
-	s.gridFilledCount = 0    // 重置成交计数
-	utils.Logger.Info("Sell filled: state reset to IDLE", zap.Bool("gridPlaced", s.gridPlaced))
-	s.mu.Unlock()
+			s.currentState = StateIdle
+			s.currentTPOrderID = 0
+			s.baseOrderID = 0
+			s.gridPlaced = false
+			s.gridFilledCount = 0
+			s.lastTPFill = time.Now()
+			utils.Logger.Info("Sell filled: state reset to IDLE", zap.Bool("gridPlaced", s.gridPlaced))
+			s.mu.Unlock()
 
-	s.exchange.CancelAllOrders()
-	utils.Logger.Info("All orders cancelled after sell filled")
+			// 撤单并重试一次，防止旧委托残留导致下一轮异常
+			if err := s.exchange.CancelAllOrders(); err != nil {
+				utils.Logger.Error("CancelAllOrders failed after TP fill, retrying", zap.Error(err))
+				time.Sleep(500 * time.Millisecond)
+				if err2 := s.exchange.CancelAllOrders(); err2 != nil {
+					utils.Logger.Error("CancelAllOrders retry also failed", zap.Error(err2))
+				} else {
+					utils.Logger.Info("CancelAllOrders succeeded on retry")
+				}
+			} else {
+				utils.Logger.Info("All orders cancelled after sell filled")
+			}
 		}
 	}
 	return nil
@@ -523,6 +547,11 @@ func (s *MartingaleStrategy) enterLong(currentPrice float64) error {
 // waitForEntryTimeout 首仓挂单超时监控
 // 如果 EntryTimeout 内首仓限价单未成交，撤单并以市价单重新入场
 func (s *MartingaleStrategy) waitForEntryTimeout(baseQty float64) {
+	// 快照当前 baseOrderID，防止跨周期误判
+	s.mu.RLock()
+	myOrderID := s.baseOrderID
+	s.mu.RUnlock()
+
 	timer := time.NewTimer(EntryTimeout)
 	defer timer.Stop()
 
@@ -532,23 +561,25 @@ func (s *MartingaleStrategy) waitForEntryTimeout(baseQty float64) {
 		utils.Logger.Info("waitForEntryTimeout: stopped via channel")
 		return
 	case <-timer.C:
-		// 超时，检查状态是否仍在等待入场
+		// 超时，检查状态是否仍在等待入场且 baseOrderID 未变更
 		s.mu.RLock()
 		state := s.currentState
-		orderID := s.baseOrderID
+		currentOrderID := s.baseOrderID
 		s.mu.RUnlock()
 
-		if state != StateWaitingEntry {
-			utils.Logger.Info("waitForEntryTimeout: state changed, no fallback needed",
-				zap.String("state", string(state)))
+		if state != StateWaitingEntry || currentOrderID != myOrderID {
+			utils.Logger.Info("waitForEntryTimeout: state or order changed, aborting",
+				zap.String("state", string(state)),
+				zap.Int64("my_order", myOrderID),
+				zap.Int64("current_order", currentOrderID))
 			return
 		}
 
 		utils.Logger.Info("waitForEntryTimeout: limit order not filled in time, cancelling",
-			zap.Int64("order_id", orderID))
+			zap.Int64("order_id", myOrderID))
 
 		// 撤销限价单
-		if err := s.exchange.CancelOrder(orderID); err != nil {
+		if err := s.exchange.CancelOrder(myOrderID); err != nil {
 			utils.Logger.Warn("waitForEntryTimeout: failed to cancel limit order (may already be filled)",
 				zap.Error(err))
 			// 撤单失败可能是已成交，检查持仓确认
@@ -566,9 +597,10 @@ func (s *MartingaleStrategy) waitForEntryTimeout(baseQty float64) {
 		// 再次检查状态（可能在撤单过程中收到了成交事件）
 		s.mu.RLock()
 		state = s.currentState
+		currentOrderID = s.baseOrderID
 		s.mu.RUnlock()
-		if state != StateWaitingEntry {
-			utils.Logger.Info("waitForEntryTimeout: state changed after cancel, no fallback needed",
+		if state != StateWaitingEntry || currentOrderID != myOrderID {
+			utils.Logger.Info("waitForEntryTimeout: state or order changed after cancel, aborting",
 				zap.String("state", string(state)))
 			return
 		}
@@ -779,6 +811,13 @@ func (s *MartingaleStrategy) updateTP() {
 		vwap = avgPrice // fallback: use entry price if VWAP unavailable
 	}
 	tpPrice := vwap * 1.008 // VWAP + 0.80%
+	// Safety: TP must be >= average entry price (never lock in a loss)
+	if tpPrice < avgPrice {
+		utils.Logger.Warn("TP below avg price, capping to break-even",
+			zap.Float64("vwap_tp", tpPrice),
+			zap.Float64("avg_price", avgPrice))
+		tpPrice = avgPrice
+	}
 	oldTPID := s.currentTPOrderID
 	s.mu.RUnlock()
 
