@@ -36,6 +36,10 @@ const TPCooldown = 30 * time.Second
 // MinOrderValue is the minimum order value in USDT for Binance Futures
 const MinOrderValue = 6.0
 
+// safetyOrderMultipliers defines quantity multipliers for each safety order level (1-9).
+// Replaces the old Fibonacci/2 scaling. Applied as: qty = unitQty * multiplier.
+var safetyOrderMultipliers = []float64{0.03, 0.03, 0.05, 0.05, 0.18, 0.32, 0.567, 0.578, 1.16}
+
 type MartingaleStrategy struct {
 	cfg      *config.StrategyConfig
 	exchange *exchange.BinanceClient
@@ -712,9 +716,8 @@ func (s *MartingaleStrategy) placeGridOrders(execPrice float64) {
 		price = utils.RoundToTickSize(price, s.tickSize)
 		price = utils.ToFixed(price, s.pricePrecision) // Should align to tickSize really
 
-		// Fibonacci Volume: Qty = UnitQty * Fib(i+1) / 2
-		// Safety order multipliers: 0.5, 0.5, 1, 1.5, 2.5, 4, 6.5, 10.5, 17...
-		volMult := s.getFibonacci(i + 1)
+		// Safety order multipliers (fixed, replaces old Fibonacci/2 scaling)
+		volMult := safetyOrderMultipliers[i]
 		qty := unitQty * volMult
 
 		// Ensure MinNotional (5 USDT) at the LIMIT PRICE
@@ -861,13 +864,4 @@ func (s *MartingaleStrategy) calcMinNotional() float64 {
 	return notional
 }
 
-func (s *MartingaleStrategy) getFibonacci(n int) float64 {
-	if n <= 0 {
-		return 0
-	}
-	a, b := 1, 1
-	for i := 1; i < n; i++ {
-		a, b = b, a+b
-	}
-	return float64(a) / 2.0
-}
+

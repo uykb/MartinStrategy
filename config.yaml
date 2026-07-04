@@ -6,7 +6,7 @@ exchange:
 
 strategy:
   max_safety_orders: 9
-  base_ratio: 0.05
+  base_ratio: 0.06
 
 api:
   enabled: true
