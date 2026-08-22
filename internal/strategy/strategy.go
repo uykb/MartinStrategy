@@ -36,9 +36,17 @@ const TPCooldown = 30 * time.Second
 // MinOrderValue is the minimum order value in USDT for Binance Futures
 const MinOrderValue = 6.0
 
-// safetyOrderMultipliers defines quantity multipliers for each safety order level (1-9).
-// Replaces the old Fibonacci/2 scaling. Applied as: qty = unitQty * multiplier.
-var safetyOrderMultipliers = []float64{0.03, 0.03, 0.05, 0.05, 0.18, 0.32, 0.567, 0.578, 1.16}
+// safetyOrderAllocations defines balance allocation percentages for each safety order level (Grid 1-9 / Levels 2-10).
+// Level 2 (Grid 1): 3%
+// Level 3 (Grid 2): 3%
+// Level 4 (Grid 3): 5%
+// Level 5 (Grid 4): 5%
+// Level 6 (Grid 5): 18%
+// Level 7 (Grid 6): 32%
+// Level 8 (Grid 7): 56.7%
+// Level 9 (Grid 8): 57.8%
+// Level 10 (Grid 9): 116%
+var safetyOrderAllocations = []float64{0.03, 0.03, 0.05, 0.05, 0.18, 0.32, 0.567, 0.578, 1.16}
 
 type MartingaleStrategy struct {
 	cfg      *config.StrategyConfig
@@ -487,29 +495,24 @@ func (s *MartingaleStrategy) handleOrderUpdate(ctx context.Context, event core.E
 func (s *MartingaleStrategy) enterLong(currentPrice float64) error {
 	utils.Logger.Info("Entering Long Position...")
 
-	// Calculate Base Quantity
-	// Logic: Unit = MinNotional (5 USDT) / Price -> rounded UP to stepSize
-	// Base Order = 1 * Unit (1倍)
-	minNotional := s.calcMinNotional()
-	unitQtyRaw := minNotional / currentPrice
-	unitQty := utils.RoundUpToTickSize(unitQtyRaw, s.stepSize)
-
-	if unitQty < s.minQty {
-		unitQty = s.minQty
-	}
-
-	baseQty := unitQty * 1.0
-	baseQty = utils.ToFixed(baseQty, s.quantityPrecision)
+	// Calculate Base Quantity (Level 1: 6% asset allocation of account balance)
+	baseNotional := s.calcMinNotional()
 
 	// 挂单价格：currentPrice + 2*tickSize，略高于当前价以提高成交概率
 	limitPrice := currentPrice + 2*s.tickSize
 	limitPrice = utils.RoundToTickSize(limitPrice, s.tickSize)
 	limitPrice = utils.ToFixed(limitPrice, s.pricePrecision)
 
+	baseQty := utils.RoundUpToTickSize(baseNotional/limitPrice, s.stepSize)
+	if baseQty < s.minQty {
+		baseQty = s.minQty
+	}
+	baseQty = utils.ToFixed(baseQty, s.quantityPrecision)
+
 	utils.Logger.Info("Calculated Base Qty (Maker Limit)",
 		zap.Float64("price", currentPrice),
 		zap.Float64("limit_price", limitPrice),
-		zap.Float64("unit_qty", unitQty),
+		zap.Float64("base_notional", baseNotional),
 		zap.Float64("base_qty", baseQty),
 	)
 
@@ -694,11 +697,16 @@ func (s *MartingaleStrategy) placeGridOrders(execPrice float64) {
 		return
 	}
 
-	minNotional := s.calcMinNotional()
+	balance, err := s.exchange.GetBalance()
+	if err != nil {
+		utils.Logger.Error("Failed to get balance for grid orders, using fallback", zap.Error(err))
+		balance = MinOrderValue / 0.06
+	}
 
-	unitQty := utils.RoundUpToTickSize(minNotional/entryPrice, s.stepSize)
-
-	utils.Logger.Info("Placing Grid Orders", zap.Float64("Entry", entryPrice), zap.Float64("UnitQty", unitQty))
+	utils.Logger.Info("Placing Grid Orders",
+		zap.Float64("Entry", entryPrice),
+		zap.Float64("Balance", balance),
+	)
 
 	// Fixed percentage-based grid distances, relative to previous level
 	// Level 1-9: 1.0%, 1.0%, 1.0%, 1.1%, 2.1%, 2.2%, 4.5%, 4.8%, 7.7%
@@ -716,29 +724,27 @@ func (s *MartingaleStrategy) placeGridOrders(execPrice float64) {
 		price = utils.RoundToTickSize(price, s.tickSize)
 		price = utils.ToFixed(price, s.pricePrecision) // Should align to tickSize really
 
-		// Safety order multipliers (fixed, replaces old Fibonacci/2 scaling)
-		volMult := safetyOrderMultipliers[i]
-		qty := unitQty * volMult
+		// Asset Allocation % for each safety order level (Grid 1-9 / Levels 2-10)
+		allocRatio := safetyOrderAllocations[i]
+		orderNotional := balance * allocRatio
 
-		// Ensure MinNotional (5 USDT) at the LIMIT PRICE
-		// If Qty * Price < 5.0, Binance will reject.
-		// Since Price < EntryPrice, the original UnitQty (based on EntryPrice) might be insufficient.
-		if qty*price < minNotional {
-			utils.Logger.Info("Adjusting Qty to meet MinNotional",
-				zap.Int("index", i+1),
-				zap.Float64("old_qty", qty),
-				zap.Float64("price", price),
-			)
-			qty = minNotional / price
+		// Ensure MinNotional (6.0 USDT) at the LIMIT PRICE
+		if orderNotional < MinOrderValue {
+			orderNotional = MinOrderValue
 		}
 
-		// Round qty to stepSize
-		qty = utils.RoundUpToTickSize(qty, s.stepSize)
+		// Calculate order quantity from target notional
+		qty := utils.RoundUpToTickSize(orderNotional/price, s.stepSize)
+		if qty < s.minQty {
+			qty = s.minQty
+		}
 		qty = utils.ToFixed(qty, s.quantityPrecision)
 
 		utils.Logger.Info("Placing Safety Order",
 			zap.Int("index", i+1),
 			zap.Float64("price", price),
+			zap.Float64("notional", orderNotional),
+			zap.Float64("alloc_pct", allocRatio*100),
 			zap.Float64("qty", qty),
 			zap.Float64("dist_pct", stepPct),
 		)

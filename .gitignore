@@ -2,16 +2,11 @@
 bot
 bot.exe
 
-# Data directory
-data/
-
-# IDE
+# IDE & OS
 .idea/
 .vscode/
 *.swp
 *.swo
-
-# OS
 .DS_Store
 Thumbs.db
 .aider*

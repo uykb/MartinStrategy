@@ -1,5 +1,11 @@
 # AGENTS.md
 
+> **Source of truth**: `README.md` is partly stale. It still claims Fibonacci quantity
+> multipliers, VWAP-based TP (`VWAP × 1.008`), and a 5s dashboard SSE push. The actual
+> code uses **fixed multipliers** (`safetyOrderMultipliers`), **`avgPrice × 1.008`** TP
+> (`internal/strategy/strategy.go:807`), and a **2s** SSE push (`internal/api/server.go:300`).
+> Trust this file and the code over README.
+
 ## Build / Test / Lint Commands
 
 ```bash
@@ -101,6 +107,8 @@ if err := doNetworkCall(); err != nil {
 ```
 
 ### Configuration
+- `config.yaml` is **required at startup**: `main.go` calls `LoadConfig("config.yaml")` and
+  panics if the file is missing. Env vars only *override* fields; they cannot replace the file.
 - Environment variables use `MARTIN_` prefix (e.g., `MARTIN_EXCHANGE_API_KEY`)
 - Struct field tags use snake_case: `mapstructure:"api_key"`
 - YAML config file uses snake_case keys
@@ -126,8 +134,8 @@ if err := doNetworkCall(); err != nil {
 - `EntryTimeout = 10 * time.Second` - 首仓限价单超时，超后回退市价
 - `TPCooldown = 30 * time.Second` - 止盈成交后冷却期，防止反复开平仓
 - Event queue buffer: 1000
-- Grid levels: 9 max (fixed percentage grid, fixed safety order multipliers)
-- Safety order quantity multipliers: 0.03, 0.03, 0.05, 0.05, 0.18, 0.32, 0.567, 0.578, 1.16 (for levels 1-9)
+- Grid levels: 9 max (fixed percentage grid, balance asset allocation sizing)
+- Safety order balance allocation ratios: 3%, 3%, 5%, 5%, 18%, 32%, 56.7%, 57.8%, 116% (for levels 2-10 / Grids 1-9)
 - Price polling interval: 10s
 - Position monitor interval: 5s
 - Grid order API rate limit: 200ms between orders
@@ -176,13 +184,20 @@ log:
 - Distances are **relative to previous order**, not absolute
 - Beyond level 9, no further orders are placed (`max_safety_orders` limit)
 
-### Fixed Safety Order Multipliers
+### Fixed Safety Order Balance Allocations
 
 ```go
-var safetyOrderMultipliers = []float64{0.03, 0.03, 0.05, 0.05, 0.18, 0.32, 0.567, 0.578, 1.16}
+var safetyOrderAllocations = []float64{0.03, 0.03, 0.05, 0.05, 0.18, 0.32, 0.567, 0.578, 1.16}
 ```
 
-Each safety order quantity = `unitQty × safetyOrderMultipliers[i]`.
+Each safety order notional = `balance × safetyOrderAllocations[i]`, and quantity = `orderNotional / gridPrice`.
+
+### Entry Order
+
+- First position is a **maker limit** order priced at `currentPrice + 2*tickSize`
+  (`internal/strategy/strategy.go:505`), not a market order, to capture maker fees.
+- If unfilled within `EntryTimeout` (10s), it is cancelled and replaced with a market order.
+- `BaseRatio` default is `0.06` (see `config.yaml`); README's `0.05` example is outdated.
 
 ### Take Profit (TP)
 
@@ -211,8 +226,8 @@ func (s *MartingaleStrategy) calcMinNotional() float64 {
 ```
 
 - 调用时机：`enterLong()` 和 `placeGridOrders()` 各调用一次，同一轮下单内缓存结果
-- `enterLong` 中计算 `unitQty = calcMinNotional() / currentPrice`
-- `placeGridOrders` 中计算 `unitQty = calcMinNotional() / entryPrice`，循环内复用该值
+- `enterLong` (Level 1 / 首仓)：`baseNotional = balance × base_ratio` (6%)，数量 `baseQty = baseNotional / limitPrice`
+- `placeGridOrders` (Level 2-10 / Grid 1-9)：每层 `orderNotional = balance × allocationRatio[i]`，数量 `qty = orderNotional / gridPrice`
 
 ## Strategy State Machine
 
