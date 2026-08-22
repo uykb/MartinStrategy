@@ -104,6 +104,15 @@ func (s *MartingaleStrategy) Snapshot() *DashboardState {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	placedLevels := s.gridFilledCount + s.countPendingSafetyOrders()
+	if placedLevels > s.cfg.MaxSafetyOrders {
+		placedLevels = s.cfg.MaxSafetyOrders
+	}
+	filledLevels := s.gridFilledCount
+	if filledLevels > s.cfg.MaxSafetyOrders {
+		filledLevels = s.cfg.MaxSafetyOrders
+	}
+
 	st := &DashboardState{
 		Running:    !s.paused,
 		Paused:     s.paused,
@@ -114,8 +123,8 @@ func (s *MartingaleStrategy) Snapshot() *DashboardState {
 		Grid: &GridInfo{
 			Placed:       s.gridPlaced,
 			MaxLevels:    s.cfg.MaxSafetyOrders,
-			FilledLevels: s.gridFilledCount,
-			PlacedLevels: s.gridFilledCount + s.countPendingSafetyOrders(),
+			FilledLevels: filledLevels,
+			PlacedLevels: placedLevels,
 		},
 		Fills:     s.fills,
 		Alerts:    s.alerts,

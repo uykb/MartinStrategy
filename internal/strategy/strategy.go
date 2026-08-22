@@ -218,12 +218,6 @@ func (s *MartingaleStrategy) initSymbolInfo() error {
 }
 
 func (s *MartingaleStrategy) syncState() {
-	// Note: We avoid holding s.mu.Lock() for the entire duration if we do heavy network calls
-	// But syncState is initialization, so it's fine.
-
-	// 1. Get Position (Network call, could be outside lock, but we need atomic update)
-	// Let's do it inside for simplicity as it's init.
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -237,49 +231,58 @@ func (s *MartingaleStrategy) syncState() {
 	amt, _ := strconv.ParseFloat(pos.PositionAmt, 64)
 	if math.Abs(amt) > 0 {
 		s.currentState = StateInPosition
-		s.gridPlaced = true // 如果有持仓，说明网格已放置
+		s.gridPlaced = true // 如果有持仓，说明网格已激活
 		utils.Logger.Info("State Synced (Has Position)", zap.String("state", string(s.currentState)), zap.Float64("amt", amt))
-
-		// If in position, we MUST ensure we have a TP order.
-		// Since we might have restarted, our memory (currentTPOrderID) is lost.
 
 		// Check Open Orders
 		orders, err := s.exchange.GetOpenOrders()
 		if err != nil {
-			utils.Logger.Error("Failed to get open orders", zap.Error(err))
+			utils.Logger.Error("Failed to get open orders during sync", zap.Error(err))
 		} else {
 			hasTP := false
-			// Simple check: do we have any Sell Limit orders?
-			// In a complex bot, we'd check ClientOrderID or Metadata.
+			buyCount := 0
+			var extraBuyIDs []int64
+
 			for _, o := range orders {
 				if o.Side == futures.SideTypeSell && o.Type == futures.OrderTypeLimit {
 					hasTP = true
 					s.currentTPOrderID = o.OrderID
 					utils.Logger.Info("Found existing TP order", zap.Int64("id", o.OrderID))
-					break
+				} else if o.Side == futures.SideTypeBuy {
+					buyCount++
+					extraBuyIDs = append(extraBuyIDs, o.OrderID)
+				}
+			}
+
+			// 如果发现挂单数异常（如历史原因导致出现 >9 个挂单），自动清理并重新整齐挂出
+			if buyCount > len(safetyOrderAllocations) {
+				utils.Logger.Warn("Detected abnormal buy orders count on startup, cleaning up",
+					zap.Int("count", buyCount),
+					zap.Int("expected_max", len(safetyOrderAllocations)))
+				for _, id := range extraBuyIDs {
+					_ = s.exchange.CancelOrder(id)
+				}
+				// 重新放置标准的 9 层网格
+				entryPrice, _ := strconv.ParseFloat(pos.EntryPrice, 64)
+				s.gridPlaced = false
+				s.gridFilledCount = 0
+				go s.placeGridOrders(entryPrice)
+			} else {
+				// 正常情况：已成交层数 = 最大层数 - 剩余挂单数
+				s.gridFilledCount = len(safetyOrderAllocations) - buyCount
+				if s.gridFilledCount < 0 {
+					s.gridFilledCount = 0
 				}
 			}
 
 			if !hasTP {
 				utils.Logger.Warn("Detected position without TP order. Restoring TP...")
-				// We launch this in a goroutine to avoid deadlock if updateTP needs lock (it does RLock)
-				// But wait, updateTP needs RLock, we hold Lock. Deadlock!
-				// We must release lock before calling updateTP, or updateTP shouldn't lock if called internally.
-				// Better: Release lock, then call updateTP.
-
-				// But we are in defer s.mu.Unlock().
-				// Let's use a flag and do it after unlock?
-				// Or spawn a goroutine that waits a bit?
-				// safest: spawn goroutine.
 				go func() {
-					// Wait a tiny bit for this lock to release
 					time.Sleep(100 * time.Millisecond)
 					s.updateTP()
 				}()
 			} else {
-				// If we have TP, we might also want to restore Grid Orders if they are missing?
-				// For now, let's just log.
-				utils.Logger.Info("State restored with existing TP.", zap.Int("open_orders", len(orders)))
+				utils.Logger.Info("State restored with existing TP.", zap.Int("open_orders", len(orders)), zap.Int("buy_orders", buyCount))
 			}
 		}
 
@@ -287,6 +290,7 @@ func (s *MartingaleStrategy) syncState() {
 		s.currentState = StateIdle
 		s.gridPlaced = false
 		s.currentTPOrderID = 0
+		s.gridFilledCount = 0
 		utils.Logger.Info("State Synced (No Position)", zap.String("state", string(s.currentState)))
 	}
 }
@@ -354,19 +358,24 @@ func (s *MartingaleStrategy) waitForFillAndPlaceGrid() {
 			utils.Logger.Info("waitForFillAndPlaceGrid: stopped via channel")
 			return
 		case <-timeout:
-			utils.Logger.Warn("waitForFillAndPlaceGrid: timeout, no position found")
-			s.mu.Lock()
-			s.currentState = StateIdle
-			s.mu.Unlock()
+			utils.Logger.Warn("waitForFillAndPlaceGrid: timeout, checking position")
+			s.mu.RLock()
+			gridPlaced := s.gridPlaced
+			s.mu.RUnlock()
+			if !gridPlaced {
+				s.mu.Lock()
+				s.currentState = StateIdle
+				s.mu.Unlock()
+			}
 			return
 		case <-ticker.C:
 			s.mu.RLock()
 			state := s.currentState
+			gridPlaced := s.gridPlaced
 			s.mu.RUnlock()
 
-			if state != StateWaitingEntry && state != StatePlacingGrid {
-				utils.Logger.Info("waitForFillAndPlaceGrid: state changed, aborting",
-					zap.String("state", string(state)))
+			// 如果网格已放置或状态已不是等待进场/布网中，直接退出
+			if gridPlaced || (state != StateWaitingEntry && state != StatePlacingGrid) {
 				return
 			}
 
@@ -419,36 +428,28 @@ func (s *MartingaleStrategy) handleOrderUpdate(ctx context.Context, event core.E
 			buyFilledQty, _ := strconv.ParseFloat(order.LastFilledQty, 64)
 			utils.Logger.Info("Buy Order Filled", zap.String("type", string(order.Type)), zap.Float64("execPrice", buyFilledPrice))
 
-			s.mu.Lock()
-			prevState := s.currentState
-			s.mu.Unlock()
-
 			s.mu.RLock()
 			gridPlaced := s.gridPlaced
+			baseOrderID := s.baseOrderID
 			s.mu.RUnlock()
 
-			if prevState == StateIdle || prevState == StateWaitingEntry || prevState == StatePlacingGrid {
-				if !gridPlaced {
-					utils.Logger.Info("Base order filled, placing grid orders", zap.Float64("execPrice", buyFilledPrice))
-					s.addFill("BUY", "BASE", buyFilledPrice, buyFilledQty)
-					s.mu.Lock()
-					s.currentState = StateInPosition
-					s.mu.Unlock()
-					go s.placeGridOrders(buyFilledPrice)
-				} else {
-					utils.Logger.Info("Base order filled but grid already placed, updating TP", zap.Float64("execPrice", buyFilledPrice))
-					s.addFill("BUY", "SAFETY", buyFilledPrice, buyFilledQty)
-					s.mu.Lock()
-					s.gridFilledCount++
-					s.currentState = StateInPosition
-					s.mu.Unlock()
-					go s.updateTP()
-				}
+			// 判断是否为首仓成交（首仓挂单 ID 匹配，或网格尚未放置）
+			if !gridPlaced || (baseOrderID != 0 && order.ID == baseOrderID) {
+				utils.Logger.Info("Base order filled, placing grid orders", zap.Float64("execPrice", buyFilledPrice))
+				s.addFill("BUY", "BASE", buyFilledPrice, buyFilledQty)
+				s.mu.Lock()
+				s.baseOrderID = 0
+				s.currentState = StateInPosition
+				s.mu.Unlock()
+				go s.placeGridOrders(buyFilledPrice)
 			} else {
 				utils.Logger.Info("Safety order filled, re-calculating TP", zap.Float64("execPrice", buyFilledPrice))
 				s.addFill("BUY", "SAFETY", buyFilledPrice, buyFilledQty)
 				s.mu.Lock()
-				s.gridFilledCount++
+				if s.gridFilledCount < len(safetyOrderAllocations) {
+					s.gridFilledCount++
+				}
+				s.currentState = StateInPosition
 				s.mu.Unlock()
 				go s.updateTP()
 			}
@@ -622,38 +623,7 @@ func (s *MartingaleStrategy) waitForEntryTimeout(baseQty float64) {
 func (s *MartingaleStrategy) placeGridOrders(execPrice float64) {
 	utils.Logger.Info("placeGridOrders started", zap.Float64("execPrice", execPrice))
 
-	// 检查网格是否已放置，防止重复
-	s.mu.RLock()
-	if s.gridPlaced {
-		s.mu.RUnlock()
-		utils.Logger.Warn("placeGridOrders skipped: grid already placed")
-		return
-	}
-	s.mu.RUnlock()
-
-	// 检查是否已有活跃的网格订单（防止重启后重复放置）
-	existingOrders, err := s.exchange.GetOpenOrders()
-	if err == nil && len(existingOrders) > 0 {
-		// 计算除了 TP 以外的网格订单数量
-		gridCount := 0
-		for _, o := range existingOrders {
-			if o.Side == futures.SideTypeBuy {
-				gridCount++
-			}
-		}
-		if gridCount > 0 {
-			utils.Logger.Warn("placeGridOrders skipped: existing grid orders found",
-				zap.Int("existing_grid_count", gridCount),
-				zap.Int("total_orders", len(existingOrders)))
-			// 更新 gridPlaced 标记为 true
-			s.mu.Lock()
-			s.gridPlaced = true
-			s.mu.Unlock()
-			return
-		}
-	}
-
-	// 防并发：如果已有实例在执行则跳过
+	// 1. 防并发：加排他锁
 	if !s.gridMu.TryLock() {
 		s.mu.Lock()
 		s.gridSkipCount++
@@ -665,14 +635,44 @@ func (s *MartingaleStrategy) placeGridOrders(execPrice float64) {
 	}
 	defer s.gridMu.Unlock()
 
-	// 再次检查（获取锁后）
-	s.mu.RLock()
+	// 2. 检查是否已经放置过网格
+	s.mu.Lock()
 	if s.gridPlaced {
-		s.mu.RUnlock()
-		utils.Logger.Warn("placeGridOrders skipped: grid already placed (after lock)")
+		s.mu.Unlock()
+		utils.Logger.Warn("placeGridOrders skipped: grid already placed")
 		return
 	}
-	s.mu.RUnlock()
+	// 立即将 gridPlaced 置为 true 并将状态转为 IN_POSITION，杜绝后续并发进入！
+	s.gridPlaced = true
+	s.currentState = StateInPosition
+	s.mu.Unlock()
+
+	// 3. 检查当前交易所上的活动 BUY 挂单
+	existingOrders, err := s.exchange.GetOpenOrders()
+	if err == nil && len(existingOrders) > 0 {
+		var existingBuyIDs []int64
+		for _, o := range existingOrders {
+			if o.Side == futures.SideTypeBuy {
+				existingBuyIDs = append(existingBuyIDs, o.OrderID)
+			}
+		}
+		// 如果当前恰好已经挂着 9 个 BUY 订单，不需要重复挂
+		if len(existingBuyIDs) == len(safetyOrderAllocations) {
+			utils.Logger.Info("placeGridOrders: exact safety orders already present on exchange",
+				zap.Int("count", len(existingBuyIDs)))
+			s.updateTP()
+			return
+		}
+		// 如果挂单数量异常（如历史重复下单导致有 >9 个挂单），先清理多余的挂单
+		if len(existingBuyIDs) > 0 {
+			utils.Logger.Warn("placeGridOrders: cleaning up existing buy orders before fresh placement",
+				zap.Int("existing_count", len(existingBuyIDs)))
+			for _, id := range existingBuyIDs {
+				_ = s.exchange.CancelOrder(id)
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
 
 	var entryPrice float64
 
@@ -685,6 +685,9 @@ func (s *MartingaleStrategy) placeGridOrders(execPrice float64) {
 		pos, err := s.exchange.GetPosition()
 		if err != nil {
 			utils.Logger.Error("Failed to get position for grid orders", zap.Error(err))
+			s.mu.Lock()
+			s.gridPlaced = false // 失败重置
+			s.mu.Unlock()
 			return
 		}
 		entryPrice, _ = strconv.ParseFloat(pos.EntryPrice, 64)
@@ -694,6 +697,9 @@ func (s *MartingaleStrategy) placeGridOrders(execPrice float64) {
 	// Validate entry price
 	if entryPrice <= 0 {
 		utils.Logger.Error("Invalid entry price, cannot place grid orders", zap.Float64("entryPrice", entryPrice))
+		s.mu.Lock()
+		s.gridPlaced = false // 失败重置
+		s.mu.Unlock()
 		return
 	}
 
@@ -758,13 +764,14 @@ func (s *MartingaleStrategy) placeGridOrders(execPrice float64) {
 		time.Sleep(200 * time.Millisecond)
 	}
 
+	// 重新将已成交层数重置为 0
+	s.mu.Lock()
+	s.gridFilledCount = 0
+	s.mu.Unlock()
+
 	// Place Initial TP
 	s.updateTP()
 
-	// 标记网格已放置
-	s.mu.Lock()
-	s.gridPlaced = true
-	s.mu.Unlock()
 	utils.Logger.Info("Grid orders placed successfully, gridPlaced=true")
 }
 

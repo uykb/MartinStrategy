@@ -67,12 +67,12 @@ func main() {
 		utils.Logger.Fatal("Failed to start user stream", zap.Error(err))
 	}
 
-	// 5. Start price polling (REST API fallback for markets without WS data)
-	go ex.StartPricePolling(10 * time.Second)
-
-	// 6. Strategy
+	// 5. Strategy (同步初始化并完成仓位与挂单状态同步)
 	strat := strategy.NewMartingaleStrategy(&cfg.Strategy, ex, bus)
-	go strat.Start()
+	strat.Start()
+
+	// 6. 状态同步完成后，再启动价格轮询（避免启动初期误判 IDLE 开新仓）
+	go ex.StartPricePolling(10 * time.Second)
 
 	// 7. Web Dashboard (API server with SSE)
 	if cfg.API.Enabled {
