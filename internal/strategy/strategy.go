@@ -146,16 +146,49 @@ func (s *MartingaleStrategy) monitorPositionStatus() {
 
 		amt, _ := strconv.ParseFloat(pos.PositionAmt, 64)
 		if math.Abs(amt) == 0 {
-			utils.Logger.Info("monitorPositionStatus: position closed (manually?), resetting state to IDLE")
+			utils.Logger.Info("monitorPositionStatus: position closed (manually or TP filled), resetting state to IDLE")
 			s.mu.Lock()
 			s.currentState = StateIdle
 			s.gridPlaced = false
 			s.currentTPOrderID = 0
+			s.gridFilledCount = 0
+			s.lastTPFill = time.Now()
 			s.mu.Unlock()
 
 			// Cancel any remaining orders
 			if err := s.exchange.CancelAllOrders(); err != nil {
 				utils.Logger.Error("monitorPositionStatus: CancelAllOrders failed", zap.Error(err))
+			}
+		} else {
+			// 持仓巡检保护：确保止盈单存在且挂单量 100% 覆盖当前全部持仓
+			orders, err := s.exchange.GetOpenOrders()
+			if err == nil {
+				var validTP *futures.Order
+				sellCount := 0
+				for _, o := range orders {
+					if o.Side == futures.SideTypeSell && o.Type == futures.OrderTypeLimit {
+						sellCount++
+						validTP = o
+					}
+				}
+
+				needTPRepair := false
+				if sellCount != 1 || validTP == nil {
+					needTPRepair = true
+				} else {
+					tpQty, _ := strconv.ParseFloat(validTP.OrigQuantity, 64)
+					// 若 TP 数量与当前持仓总量不一致（差值大于半个步长）
+					if math.Abs(tpQty-math.Abs(amt)) > s.stepSize/2 {
+						needTPRepair = true
+					}
+				}
+
+				if needTPRepair {
+					utils.Logger.Warn("monitorPositionStatus: TP missing or mismatch with total position, repairing TP immediately",
+						zap.Float64("total_position", math.Abs(amt)),
+						zap.Int("sell_orders_count", sellCount))
+					go s.updateTP()
+				}
 			}
 		}
 	}
@@ -239,22 +272,34 @@ func (s *MartingaleStrategy) syncState() {
 		if err != nil {
 			utils.Logger.Error("Failed to get open orders during sync", zap.Error(err))
 		} else {
-			hasTP := false
+			var validTPOrder *futures.Order
+			var extraTPIDs []int64
 			buyCount := 0
 			var extraBuyIDs []int64
 
 			for _, o := range orders {
 				if o.Side == futures.SideTypeSell && o.Type == futures.OrderTypeLimit {
-					hasTP = true
-					s.currentTPOrderID = o.OrderID
-					utils.Logger.Info("Found existing TP order", zap.Int64("id", o.OrderID))
+					tpQty, _ := strconv.ParseFloat(o.OrigQuantity, 64)
+					// 严格比对：TP 挂单数量必须与当前总持仓量一致
+					if validTPOrder == nil && math.Abs(tpQty-math.Abs(amt)) <= s.stepSize/2 {
+						validTPOrder = o
+						s.currentTPOrderID = o.OrderID
+					} else {
+						extraTPIDs = append(extraTPIDs, o.OrderID)
+					}
 				} else if o.Side == futures.SideTypeBuy {
 					buyCount++
 					extraBuyIDs = append(extraBuyIDs, o.OrderID)
 				}
 			}
 
-			// 如果发现挂单数异常（如历史原因导致出现 >9 个挂单），自动清理并重新整齐挂出
+			// 如果有数量不匹配或多余的旧 TP 单，清理它们
+			for _, id := range extraTPIDs {
+				utils.Logger.Info("Cleaning up mismatched/extra old TP order on sync", zap.Int64("id", id))
+				_ = s.exchange.CancelOrder(id)
+			}
+
+			// 如果发现 BUY 挂单数异常（如历史原因导致出现 >9 个挂单），自动清理并重新整齐挂出
 			if buyCount > len(safetyOrderAllocations) {
 				utils.Logger.Warn("Detected abnormal buy orders count on startup, cleaning up",
 					zap.Int("count", buyCount),
@@ -275,14 +320,18 @@ func (s *MartingaleStrategy) syncState() {
 				}
 			}
 
-			if !hasTP {
-				utils.Logger.Warn("Detected position without TP order. Restoring TP...")
+			// 如果没有完全匹配 100% 持仓量的 TP 单，立即重新挂出最新全额止盈单
+			if validTPOrder == nil {
+				utils.Logger.Warn("Detected position without matching 100% TP order. Restoring fresh TP...")
 				go func() {
 					time.Sleep(100 * time.Millisecond)
 					s.updateTP()
 				}()
 			} else {
-				utils.Logger.Info("State restored with existing TP.", zap.Int("open_orders", len(orders)), zap.Int("buy_orders", buyCount))
+				utils.Logger.Info("State restored with valid 100% TP order.",
+					zap.Int64("tpOrderID", validTPOrder.OrderID),
+					zap.Float64("posAmt", math.Abs(amt)),
+					zap.Int("buy_orders", buyCount))
 			}
 		}
 
@@ -821,25 +870,39 @@ func (s *MartingaleStrategy) updateTP() {
 	oldTPID := s.currentTPOrderID
 	s.mu.RUnlock()
 
-	// 3. Cancel old TP
-	if oldTPID != 0 {
-		utils.Logger.Info("Cancelling old TP", zap.Int64("id", oldTPID))
-		if err := s.exchange.CancelOrder(oldTPID); err != nil {
-			utils.Logger.Warn("Failed to cancel old TP (might be filled or already canceled)", zap.Error(err))
+	// 3. Cancel old TP orders on exchange to prevent duplicates/conflicts
+	orders, err := s.exchange.GetOpenOrders()
+	if err == nil {
+		for _, o := range orders {
+			if o.Side == futures.SideTypeSell && o.Type == futures.OrderTypeLimit {
+				utils.Logger.Info("Cancelling existing SELL TP order", zap.Int64("id", o.OrderID))
+				_ = s.exchange.CancelOrder(o.OrderID)
+			}
 		}
+		time.Sleep(100 * time.Millisecond)
+	} else if oldTPID != 0 {
+		utils.Logger.Info("Cancelling old TP by ID", zap.Int64("id", oldTPID))
+		_ = s.exchange.CancelOrder(oldTPID)
 	}
 
-	// 4. Place new TP
-	// TP Qty = Full Position
+	// 4. Place new 100% Full-Position TP order
+	// TP Qty = 100% Full Position
 	// Round Price to TickSize
 	tpPrice = utils.RoundToTickSize(tpPrice, s.tickSize)
-	// Double check with precision just in case
 	tpPrice = utils.ToFixed(tpPrice, s.pricePrecision)
 
-	// Round Qty to precision
+	// Round Qty to stepSize & precision (100% 持仓量)
 	tpQty := utils.ToFixed(math.Abs(amt), s.quantityPrecision)
+	if tpQty < s.minQty {
+		tpQty = s.minQty
+	}
 
-	utils.Logger.Info("Updating TP", zap.Float64("Price", tpPrice), zap.Float64("Qty", tpQty))
+	utils.Logger.Info("Placing New 100% Full Position TP Order",
+		zap.Float64("EntryPrice", avgPrice),
+		zap.Float64("TPPrice", tpPrice),
+		zap.Float64("TotalPositionAmt", math.Abs(amt)),
+		zap.Float64("TPQty", tpQty),
+	)
 
 	resp, err := s.exchange.PlaceOrder(futures.SideTypeSell, futures.OrderTypeLimit, tpQty, tpPrice, true)
 	if err != nil {

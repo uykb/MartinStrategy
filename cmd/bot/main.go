@@ -94,25 +94,22 @@ func main() {
 
 	ex.StopUserStream()
 
-	// Graceful shutdown: only cancel orders if no open position
-	// If a position exists, leave orders untouched so they survive restart
+	// Graceful shutdown: 只有在明确无持仓（amt == 0 且查询成功）时才清理残留挂单
+	// 只要检测到持仓，或者查询持仓出错时，坚决保留所有持仓与挂单，绝不平仓，绝不撤单！
 	pos, posErr := ex.GetPosition()
 	if posErr != nil {
-		utils.Logger.Error("Failed to get position on shutdown, cancelling orders", zap.Error(posErr))
-		if err := ex.CancelAllOrders(); err != nil {
-			utils.Logger.Error("Failed to cancel orders on shutdown", zap.Error(err))
-		}
+		utils.Logger.Warn("Shutdown: failed to query position, safely preserving all orders and positions", zap.Error(posErr))
 	} else {
 		amt, _ := strconv.ParseFloat(pos.PositionAmt, 64)
 		if math.Abs(amt) == 0 {
-			utils.Logger.Info("No open position, cancelling all orders before shutdown")
+			utils.Logger.Info("Shutdown: no open position detected, cancelling lingering orders")
 			if err := ex.CancelAllOrders(); err != nil {
 				utils.Logger.Error("Failed to cancel orders on shutdown", zap.Error(err))
 			} else {
-				utils.Logger.Info("All orders cancelled")
+				utils.Logger.Info("All lingering orders cancelled on clean shutdown")
 			}
 		} else {
-			utils.Logger.Info("Open position detected, preserving orders on shutdown",
+			utils.Logger.Info("Shutdown: open position detected, safely preserving all positions and orders across restarts",
 				zap.Float64("position_amt", amt))
 		}
 	}
