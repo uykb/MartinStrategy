@@ -88,6 +88,8 @@ type MartingaleStrategy struct {
 	cachedOrders    []*futures.Order
 	cachedMarkPrice float64
 
+	initialEntryPrice float64 // 首仓入场价格
+
 	// Dashboard history (ring buffers)
 	fills  []FillInfo
 	alerts []AlertInfo
@@ -153,6 +155,7 @@ func (s *MartingaleStrategy) monitorPositionStatus() {
 			s.currentTPOrderID = 0
 			s.gridFilledCount = 0
 			s.lastTPFill = time.Now()
+			s.initialEntryPrice = 0.0
 			s.mu.Unlock()
 
 			// Cancel any remaining orders
@@ -265,6 +268,9 @@ func (s *MartingaleStrategy) syncState() {
 	if math.Abs(amt) > 0 {
 		s.currentState = StateInPosition
 		s.gridPlaced = true // 如果有持仓，说明网格已激活
+		if s.initialEntryPrice == 0 {
+			s.initialEntryPrice, _ = strconv.ParseFloat(pos.EntryPrice, 64)
+		}
 		utils.Logger.Info("State Synced (Has Position)", zap.String("state", string(s.currentState)), zap.Float64("amt", amt))
 
 		// Check Open Orders
@@ -340,6 +346,7 @@ func (s *MartingaleStrategy) syncState() {
 		s.gridPlaced = false
 		s.currentTPOrderID = 0
 		s.gridFilledCount = 0
+		s.initialEntryPrice = 0.0
 		utils.Logger.Info("State Synced (No Position)", zap.String("state", string(s.currentState)))
 	}
 }
@@ -383,6 +390,7 @@ func (s *MartingaleStrategy) handleTick(ctx context.Context, event core.Event) e
 		// 下单失败，恢复状态
 		s.mu.Lock()
 		s.currentState = StateIdle
+		s.initialEntryPrice = 0.0
 		s.mu.Unlock()
 		utils.Logger.Error("enterLong failed, resetting to IDLE", zap.Error(err))
 		return err
@@ -414,6 +422,7 @@ func (s *MartingaleStrategy) waitForFillAndPlaceGrid() {
 			if !gridPlaced {
 				s.mu.Lock()
 				s.currentState = StateIdle
+				s.initialEntryPrice = 0.0
 				s.mu.Unlock()
 			}
 			return
@@ -488,6 +497,7 @@ func (s *MartingaleStrategy) handleOrderUpdate(ctx context.Context, event core.E
 				s.addFill("BUY", "BASE", buyFilledPrice, buyFilledQty)
 				s.mu.Lock()
 				s.baseOrderID = 0
+				s.initialEntryPrice = buyFilledPrice
 				s.currentState = StateInPosition
 				s.mu.Unlock()
 				go s.placeGridOrders(buyFilledPrice)
@@ -520,6 +530,7 @@ func (s *MartingaleStrategy) handleOrderUpdate(ctx context.Context, event core.E
 			s.gridPlaced = false
 			s.gridFilledCount = 0
 			s.lastTPFill = time.Now()
+			s.initialEntryPrice = 0.0
 			utils.Logger.Info("Sell filled: state reset to IDLE", zap.Bool("gridPlaced", s.gridPlaced))
 			s.mu.Unlock()
 
@@ -664,6 +675,7 @@ func (s *MartingaleStrategy) waitForEntryTimeout(baseQty float64) {
 			utils.Logger.Error("waitForEntryTimeout: market fallback failed", zap.Error(err))
 			s.mu.Lock()
 			s.currentState = StateIdle
+			s.initialEntryPrice = 0.0
 			s.mu.Unlock()
 		}
 	}

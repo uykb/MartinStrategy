@@ -46,14 +46,15 @@ type DashboardState struct {
 
 // PositionInfo describes the current position for the dashboard.
 type PositionInfo struct {
-	HasPosition   bool    `json:"hasPosition"`
-	Side          string  `json:"side"`
-	Size          float64 `json:"size"`
-	EntryPrice    float64 `json:"entryPrice"`
-	MarkPrice     float64 `json:"markPrice"`
-	Leverage      int     `json:"leverage"`
-	UnrealizedPnl float64 `json:"unrealizedPnl"`
-	UnrealizedPct float64 `json:"unrealizedPct"`
+	HasPosition       bool    `json:"hasPosition"`
+	Side              string  `json:"side"`
+	Size              float64 `json:"size"`
+	EntryPrice        float64 `json:"entryPrice"`
+	InitialEntryPrice float64 `json:"initialEntryPrice"`
+	MarkPrice         float64 `json:"markPrice"`
+	Leverage          int     `json:"leverage"`
+	UnrealizedPnl     float64 `json:"unrealizedPnl"`
+	UnrealizedPct     float64 `json:"unrealizedPct"`
 }
 
 // OrderInfo describes a single open order.
@@ -93,7 +94,7 @@ type AlertInfo struct {
 // ── Constants ────────────────────────────────────────────────────────
 
 const (
-	maxFills  = 50
+	maxFills  = 10
 	maxAlerts = 50
 )
 
@@ -139,14 +140,19 @@ if s.cachedPosition != nil {
 		lev, _ := strconv.Atoi(s.cachedPosition.Leverage)
 
 		if math.Abs(amt) > 0 {
+			initEntry := s.initialEntryPrice
+			if initEntry == 0 {
+				initEntry = entry
+			}
 			st.Position = &PositionInfo{
-				HasPosition:   true,
-				Side:         "LONG",
-				Size:         amt,
-				EntryPrice:   entry,
-				MarkPrice:    s.cachedMarkPrice,
-				Leverage:     lev,
-				UnrealizedPnl: upnl,
+				HasPosition:       true,
+				Side:             "LONG",
+				Size:             amt,
+				EntryPrice:       entry,
+				InitialEntryPrice: initEntry,
+				MarkPrice:        s.cachedMarkPrice,
+				Leverage:         lev,
+				UnrealizedPnl:     upnl,
 			}
 			if entry > 0 && s.cachedMarkPrice > 0 {
 				st.Position.UnrealizedPct = (s.cachedMarkPrice - entry) / entry * 100
@@ -244,6 +250,7 @@ func (s *MartingaleStrategy) CloseAll() error {
 		s.currentTPOrderID = 0
 		s.gridFilledCount = 0
 		s.baseOrderID = 0
+		s.initialEntryPrice = 0.0
 		s.mu.Unlock()
 	}()
 	return nil
@@ -298,8 +305,9 @@ func (s *MartingaleStrategy) countPendingSafetyOrders() int {
 func (s *MartingaleStrategy) addFill(side, fillType string, price, qty float64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	loc := time.FixedZone("UTC+8", 8*3600)
 	s.fills = append(s.fills, FillInfo{
-		Time:     time.Now().Format("15:04:05"),
+		Time:     time.Now().In(loc).Format("01-02 15:04:05"),
 		Side:     side,
 		Price:    price,
 		Quantity: qty,

@@ -56,10 +56,29 @@ button.act:disabled{opacity:.45;cursor:not-allowed}
 .chart-controls select{background:var(--panel);color:var(--txt);border:1px solid var(--border);border-radius:4px;padding:3px 8px;font-size:11px}
 .btn-sm{background:var(--panel);color:var(--txt);border:1px solid var(--border);border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer}
 .btn-sm:hover{border-color:var(--blu)}
+.btn-sm.start{background:var(--grn);color:#fff;border-color:var(--grn)}
 .ip-badge{font-size:10px;color:var(--blu);border:1px solid #388bfd44;background:#388bfd12;border-radius:4px;padding:2px 8px;cursor:pointer;user-select:all;white-space:nowrap}
 .ip-badge:hover{border-color:var(--blu)}
-@media(max-width:768px){.summary{grid-template-columns:1fr 1fr}.bottom2{grid-template-columns:1fr}.card .big{font-size:16px}.page{padding:12px}header{padding:8px 12px;flex-wrap:wrap}}
-@media(max-width:480px){.summary{grid-template-columns:1fr}}
+.grid-steps{display:flex;gap:8px;overflow-x:auto;padding:6px 0;-webkit-overflow-scrolling:touch}
+.grid-step-card{flex:1;min-width:90px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:8px 10px;text-align:center;position:relative;transition:all .3s ease}
+.grid-step-card.filled{background:rgba(46,160,67,0.15);border-color:#2ea043}
+.grid-step-card.placed{background:rgba(56,139,253,0.15);border-color:#388bfd}
+.grid-step-card.pending{background:var(--panel);border-color:var(--border);opacity:.6}
+.grid-step-title{font-size:11px;font-weight:600;color:var(--txt);margin-bottom:4px}
+.grid-step-card.pending .grid-step-title{color:var(--mut)}
+.grid-step-val{font-size:14px;font-weight:700;margin-bottom:2px}
+.grid-step-card.filled .grid-step-val{color:#3fb950}
+.grid-step-card.placed .grid-step-val{color:#58a6ff}
+.grid-step-card.pending .grid-step-val{color:var(--mut)}
+.grid-step-lbl{font-size:10px;color:var(--mut)}
+.grid-step-badge{font-size:9px;padding:1px 4px;border-radius:4px;display:inline-block;margin-top:4px;font-weight:600}
+.grid-step-card.filled .grid-step-badge{background:#2ea04333;color:#3fb950}
+.grid-step-card.placed .grid-step-badge{background:#388bfd33;color:#58a6ff}
+.grid-step-card.pending .grid-step-badge{background:rgba(110,118,129,0.1);color:var(--mut)}
+
+@media(max-width:1024px){.summary{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:768px){.summary{grid-template-columns:repeat(2,1fr)}.bottom2{grid-template-columns:1fr}.card .big{font-size:16px}.page{padding:12px}header{padding:8px 12px;flex-wrap:wrap}}
+@media(max-width:480px){.summary{grid-template-columns:repeat(2,1fr)}.summary .card:last-child{grid-column:span 2}}
 </style>
 <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 </head>
@@ -79,6 +98,7 @@ button.act:disabled{opacity:.45;cursor:not-allowed}
   <h1>Martin</h1>
   <span id="stateBadge" class="badge state-idle">IDLE</span>
   <span class="ip-badge" id="ipBadge" title="点击复制公网IP — 用于添加Binance API白名单" onclick="copyIP()">获取IP…</span>
+  <button class="btn-sm" id="pauseToggleBtn" style="margin-left:6px">暂停</button>
   <div class="hdr-actions">
     <span class="muted" style="font-size:11px" id="conn">连接中…</span>
     <button class="btn-sm" id="logoutBtn" style="display:none">退出</button>
@@ -86,10 +106,7 @@ button.act:disabled{opacity:.45;cursor:not-allowed}
 </header>
 
 <main class="page">
-  <div class="controls">
-    <button class="act ghost" id="pauseToggleBtn">暂停</button>
-    <button class="act stop" id="closeAllBtn">全部平仓</button>
-  </div>
+
 
   <section class="summary">
     <div class="card"><label>余额 &middot; 权益</label><div class="big" id="sumBal">—</div><div class="sub" id="sumEq">—</div></div>
@@ -102,6 +119,16 @@ button.act:disabled{opacity:.45;cursor:not-allowed}
   <article class="panel">
     <div class="panel-head"><h2>当前持仓</h2><span class="muted" style="font-size:11px" id="posMeta">—</span></div>
     <div class="panel-body" id="posBody"><div class="empty">暂无持仓</div></div>
+  </article>
+
+  <article class="panel">
+    <div class="panel-head">
+      <h2>网格阶梯看板</h2>
+      <span class="muted" style="font-size:11px" id="gridVisualMeta">—</span>
+    </div>
+    <div class="panel-body" id="gridStepsContainer">
+      <div class="empty">暂无网格信息</div>
+    </div>
   </article>
 
   <article class="panel">
@@ -235,11 +262,19 @@ function updatePriceLines(s){
   if(!chart||!candleSeries)return;
   priceLines.forEach(pl=>candleSeries.removePriceLine(pl));
   priceLines=[];
-  if(s.position&&s.position.hasPosition&&s.position.entryPrice){
-    priceLines.push(candleSeries.createPriceLine({
-      price:s.position.entryPrice,color:'#58a6ff',lineStyle:2,
-      title:'入场 '+fmtP(s.position.entryPrice),axisLabelVisible:true
-    }));
+  if(s.position&&s.position.hasPosition){
+    if(s.position.initialEntryPrice){
+      priceLines.push(candleSeries.createPriceLine({
+        price:s.position.initialEntryPrice,color:'#7c5cff',lineStyle:2,
+        title:'首仓 '+fmtP(s.position.initialEntryPrice),axisLabelVisible:true
+      }));
+    }
+    if(s.position.entryPrice){
+      priceLines.push(candleSeries.createPriceLine({
+        price:s.position.entryPrice,color:'#58a6ff',lineStyle:0,
+        title:'均价 '+fmtP(s.position.entryPrice),axisLabelVisible:true
+      }));
+    }
   }
   if(s.tpOrder&&s.tpOrder.price){
     priceLines.push(candleSeries.createPriceLine({
@@ -251,8 +286,8 @@ function updatePriceLines(s){
     s.openOrders.forEach(o=>{
       if(o.side==='BUY'&&o.price){
         priceLines.push(candleSeries.createPriceLine({
-          price:o.price,color:'#d29922',lineStyle:1,
-          title:'安全单 '+fmtP(o.price)+' × '+fmtQ(o.quantity),axisLabelVisible:true
+          price:o.price,color:'rgba(210,153,34,0.4)',lineStyle:1,
+          title:fmtQ(o.quantity),axisLabelVisible:true
         }));
       }
     });
@@ -296,22 +331,6 @@ $('pauseToggleBtn').onclick=async()=>{
   const paused=$('pauseToggleBtn').textContent==='恢复';
   try{await apiPost(paused?'/api/resume':'/api/pause')}catch(e){alert(e.message)}
 };
-let closeAllArmed=false,closeAllTimer=null;
-$('closeAllBtn').onclick=async()=>{
-  const b=$('closeAllBtn');
-  if(!closeAllArmed){
-    closeAllArmed=true;
-    b.textContent='再次点击确认平仓';
-    b.style.outline='2px solid var(--red)';
-    closeAllTimer=setTimeout(()=>{closeAllArmed=false;b.textContent='全部平仓';b.style.outline=''},3000);
-    return;
-  }
-  clearTimeout(closeAllTimer);
-  closeAllArmed=false;
-  b.disabled=true;b.textContent='平仓中…';b.style.outline='';
-  try{await apiPost('/api/close-all');b.textContent='指令已提交'}catch(e){alert(e.message)}
-  setTimeout(()=>{b.disabled=false;b.textContent='全部平仓'},3000);
-};
 
 function usd(n){const v=Number(n);if(!Number.isFinite(v))return'—';return'$'+v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}
 function signed(n){const v=Number(n);if(!Number.isFinite(v))return'—';const s=v>=0?'+':'-';return s+'$'+Math.abs(v).toFixed(2)}
@@ -332,8 +351,8 @@ function render(s){
   badge.textContent=s.stateLabel||s.state;
   badge.className='badge '+stateCls(s.state);
   const toggle=$('pauseToggleBtn');
-  if(s.paused){toggle.textContent='恢复';toggle.className='act start';}
-  else{toggle.textContent='暂停';toggle.className='act ghost';}
+  if(s.paused){toggle.textContent='恢复';toggle.className='btn-sm start';}
+  else{toggle.textContent='暂停';toggle.className='btn-sm';}
 
   // Summary
   $('sumBal').textContent=usd(s.balance);
@@ -345,6 +364,47 @@ function render(s){
   if(s.grid){
     $('sumGrid').textContent=(s.grid.placedLevels||0)+'/'+(s.grid.maxLevels||0)+' 层';
     $('sumGridSub').textContent=s.grid.placed?((s.grid.filledLevels||0)+' 已成交'):'网格未放置';
+
+    const maxLevels = s.grid.maxLevels || 9;
+    const filledLevels = s.grid.filledLevels || 0;
+    const placedLevels = s.grid.placedLevels || 0;
+    const placed = s.grid.placed;
+
+    const pcts = [1.0, 1.0, 1.0, 1.1, 2.1, 2.2, 4.5, 4.8, 7.7];
+    const allocs = [3, 3, 5, 5, 18, 32, 56.7, 57.8, 116];
+
+    let html = '<div class="grid-steps">';
+    for (let i = 0; i < maxLevels; i++) {
+      let statusClass = 'pending';
+      let statusText = '未挂单';
+      
+      if (placed) {
+        if (i < filledLevels) {
+          statusClass = 'filled';
+          statusText = '已成交';
+        } else if (i < placedLevels) {
+          statusClass = 'placed';
+          statusText = '挂单中';
+        }
+      }
+      
+      const dist = pcts[i] !== undefined ? pcts[i] + '%' : '—';
+      const alloc = allocs[i] !== undefined ? allocs[i] + '%' : '—';
+
+      html += '<div class="grid-step-card ' + statusClass + '">' +
+        '<div class="grid-step-title">安全单 L' + (i+1) + '</div>' +
+        '<div class="grid-step-val">' + dist + '</div>' +
+        '<div class="grid-step-lbl">网格间距</div>' +
+        '<div class="grid-step-lbl" style="margin-top:2px;">配资: ' + alloc + '</div>' +
+        '<span class="grid-step-badge">' + statusText + '</span>' +
+      '</div>';
+    }
+    html += '</div>';
+    $('gridStepsContainer').innerHTML = html;
+    $('gridVisualMeta').textContent = '已放置 ' + placedLevels + '/' + maxLevels + ' 层 · 已成交 ' + filledLevels + ' 层';
+  } else {
+    $('gridStepsContainer').innerHTML = '<div class="empty">暂无网格信息</div>';
+    $('gridVisualMeta').textContent = '—';
   }
 
   $('sumOrders').textContent=(s.openOrders||[]).length+' 单';
@@ -358,9 +418,10 @@ function render(s){
   if(s.position&&s.position.hasPosition){
     const p=s.position;
     $('posMeta').textContent=p.side+' · '+fmtSize(p.size)+' · 杠杆 '+p.leverage+'x';
-    $('posBody').innerHTML='<table><thead><tr><th>方向</th><th>数量</th><th>开仓价</th><th>标记价</th><th>杠杆</th><th>未实现盈亏</th><th>盈亏%</th></tr></thead><tbody><tr>'+
+    $('posBody').innerHTML='<table><thead><tr><th>方向</th><th>数量</th><th>首仓价</th><th>持仓均价</th><th>标记价</th><th>杠杆</th><th>未实现盈亏</th><th>盈亏%</th></tr></thead><tbody><tr>'+
       '<td><span class="pill buy">'+p.side+'</span></td>'+
       '<td>'+fmtSize(p.size)+'</td>'+
+      '<td>'+fmtPrice(p.initialEntryPrice)+'</td>'+
       '<td>'+fmtPrice(p.entryPrice)+'</td>'+
       '<td>'+fmtPrice(p.markPrice)+'</td>'+
       '<td>'+p.leverage+'x</td>'+
@@ -412,7 +473,7 @@ function render(s){
   $('fillsCount').textContent=fills.length+' 笔';
   if(fills.length){
     $('fillsBody').innerHTML='<table><thead><tr><th>时间</th><th>方向</th><th>类型</th><th>价格</th><th>数量</th></tr></thead><tbody>'+
-      fills.slice().reverse().map(f=>
+      fills.slice(-10).reverse().map(f=>
         '<tr><td>'+f.time+'</td>'+
         '<td><span class="pill '+f.side.toLowerCase()+'">'+f.side+'</span></td>'+
         '<td>'+f.type+'</td>'+
