@@ -95,7 +95,7 @@ button.act:disabled{opacity:.45;cursor:not-allowed}
 
 <header>
   <span id="dot" class="dot"></span>
-  <h1>Martin</h1>
+
   <span id="stateBadge" class="badge state-idle">IDLE</span>
   <span class="ip-badge" id="ipBadge" title="点击复制公网IP — 用于添加Binance API白名单" onclick="copyIP()">获取IP…</span>
   <button class="btn-sm" id="pauseToggleBtn" style="margin-left:6px">暂停</button>
@@ -108,13 +108,7 @@ button.act:disabled{opacity:.45;cursor:not-allowed}
 <main class="page">
 
 
-  <section class="summary">
-    <div class="card"><label>余额 &middot; 权益</label><div class="big" id="sumBal">—</div><div class="sub" id="sumEq">—</div></div>
-    <div class="card"><label>状态</label><div class="big" id="sumState">—</div><div class="sub" id="sumSymbol">—</div></div>
-    <div class="card"><label>网格</label><div class="big" id="sumGrid">—</div><div class="sub" id="sumGridSub">—</div></div>
-    <div class="card"><label>挂单</label><div class="big" id="sumOrders">—</div><div class="sub" id="sumOrdersSub">—</div></div>
-    <div class="card"><label>未实现盈亏</label><div class="big" id="sumPnl">—</div><div class="sub" id="sumPnlSub">—</div></div>
-  </section>
+
 
   <article class="panel">
     <div class="panel-head"><h2>当前持仓</h2><span class="muted" style="font-size:11px" id="posMeta">—</span></div>
@@ -263,12 +257,7 @@ function updatePriceLines(s){
   priceLines.forEach(pl=>candleSeries.removePriceLine(pl));
   priceLines=[];
   if(s.position&&s.position.hasPosition){
-    if(s.position.initialEntryPrice){
-      priceLines.push(candleSeries.createPriceLine({
-        price:s.position.initialEntryPrice,color:'#7c5cff',lineStyle:2,
-        title:'首仓 '+fmtP(s.position.initialEntryPrice),axisLabelVisible:true
-      }));
-    }
+
     if(s.position.entryPrice){
       priceLines.push(candleSeries.createPriceLine({
         price:s.position.entryPrice,color:'#58a6ff',lineStyle:0,
@@ -354,16 +343,7 @@ function render(s){
   if(s.paused){toggle.textContent='恢复';toggle.className='btn-sm start';}
   else{toggle.textContent='暂停';toggle.className='btn-sm';}
 
-  // Summary
-  $('sumBal').textContent=usd(s.balance);
-  $('sumEq').className='big';
-  $('sumEq').textContent=usd(s.equity);
-  $('sumState').textContent=s.stateLabel||s.state;
-  $('sumSymbol').textContent=s.symbol||'—';
-
   if(s.grid){
-    $('sumGrid').textContent=(s.grid.placedLevels||0)+'/'+(s.grid.maxLevels||0)+' 层';
-    $('sumGridSub').textContent=s.grid.placed?((s.grid.filledLevels||0)+' 已成交'):'网格未放置';
 
     const maxLevels = s.grid.maxLevels || 9;
     const filledLevels = s.grid.filledLevels || 0;
@@ -407,17 +387,12 @@ function render(s){
     $('gridVisualMeta').textContent = '—';
   }
 
-  $('sumOrders').textContent=(s.openOrders||[]).length+' 单';
-  $('sumOrdersSub').textContent=s.tpOrder?'含止盈单':'无止盈单';
 
-  const pnl=s.position&&s.position.hasPosition?s.position.unrealizedPnl:0;
-  $('sumPnl').innerHTML='<span class="'+pnlCls(pnl)+'">'+signed(pnl)+'</span>';
-  $('sumPnlSub').textContent=s.position&&s.position.hasPosition?s.position.unrealizedPct.toFixed(2)+'%':'无持仓';
 
   // Position
   if(s.position&&s.position.hasPosition){
     const p=s.position;
-    $('posMeta').textContent=p.side+' · '+fmtSize(p.size)+' · 杠杆 '+p.leverage+'x';
+    $('posMeta').textContent=p.side+' · '+fmtSize(p.size)+' · 杠杆 '+p.leverage+'x · 余额 '+usd(s.balance);
     $('posBody').innerHTML='<table><thead><tr><th>方向</th><th>数量</th><th>首仓价</th><th>持仓均价</th><th>标记价</th><th>杠杆</th><th>未实现盈亏</th><th>盈亏%</th></tr></thead><tbody><tr>'+
       '<td><span class="pill buy">'+p.side+'</span></td>'+
       '<td>'+fmtSize(p.size)+'</td>'+
@@ -429,7 +404,7 @@ function render(s){
       '<td class="'+pnlCls(p.unrealizedPnl)+'">'+p.unrealizedPct.toFixed(2)+'%</td>'+
       '</tr></tbody></table>';
   }else{
-    $('posMeta').textContent='—';
+    $('posMeta').textContent='余额 '+usd(s.balance);
     $('posBody').innerHTML='<div class="empty">暂无持仓</div>';
   }
 
