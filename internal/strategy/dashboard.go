@@ -1,7 +1,6 @@
 package strategy
 
 import (
-	"fmt"
 	"math"
 	"strconv"
 	"time"
