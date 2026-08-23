@@ -267,7 +267,7 @@ The `internal/api` package serves a browser dashboard with:
 - `/api/state` — JSON snapshot of strategy state
 - `/api/stream` — SSE stream (pushes state every 2s)
 - `/api/login` — Session-based auth (24h HMAC token)
-- `/api/pause` / `/api/resume` / `/api/close-all` — Control endpoints
+- `/api/pause` / `/api/resume` — Control endpoints
 - `/api/klines?interval=1m&limit=200` — OHLCV chart data
 - `/api/health` — Health check + public IP
 

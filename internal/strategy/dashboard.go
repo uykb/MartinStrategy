@@ -226,36 +226,6 @@ func (s *MartingaleStrategy) Resume() error {
 	return nil
 }
 
-// CloseAll cancels all orders and market-closes any open position, then resets to IDLE.
-func (s *MartingaleStrategy) CloseAll() error {
-	s.addAlert("手动全部平仓 — 撤单并市价平仓")
-	go func() {
-		if err := s.exchange.CancelAllOrders(); err != nil {
-			s.addAlert(fmt.Sprintf("撤单失败: %v", err))
-		}
-		pos, err := s.exchange.GetPosition()
-		if err == nil {
-			amt, _ := strconv.ParseFloat(pos.PositionAmt, 64)
-			if math.Abs(amt) > 0 {
-				if _, err := s.exchange.PlaceOrder(futures.SideTypeSell, futures.OrderTypeMarket, math.Abs(amt), 0, true); err != nil {
-					s.addAlert(fmt.Sprintf("市价平仓失败: %v", err))
-				} else {
-					s.addAlert("市价平仓单已提交")
-				}
-			}
-		}
-		s.mu.Lock()
-		s.currentState = StateIdle
-		s.gridPlaced = false
-		s.currentTPOrderID = 0
-		s.gridFilledCount = 0
-		s.baseOrderID = 0
-		s.initialEntryPrice = 0.0
-		s.mu.Unlock()
-	}()
-	return nil
-}
-
 // IsPaused returns whether the strategy is currently paused.
 func (s *MartingaleStrategy) IsPaused() bool {
 	s.mu.RLock()

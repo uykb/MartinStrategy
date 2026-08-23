@@ -26,7 +26,6 @@ type StrategyController interface {
 	Snapshot() *strategy.DashboardState
 	Pause() error
 	Resume() error
-	CloseAll() error
 	GetKlines(interval string, limit int) ([]strategy.KlineBar, error)
 }
 
@@ -98,7 +97,6 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/login", s.handleLogin)
 	mux.HandleFunc("/api/pause", s.withAuth(s.handlePause))
 	mux.HandleFunc("/api/resume", s.withAuth(s.handleResume))
-	mux.HandleFunc("/api/close-all", s.withAuth(s.handleCloseAll))
 	mux.HandleFunc("/api/klines", s.withAuth(s.handleKlines))
 
 	go s.pushLoop()
@@ -337,18 +335,6 @@ func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.sc.Resume(); err != nil {
-		jsonErr(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, map[string]bool{"ok": true})
-}
-
-func (s *Server) handleCloseAll(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		jsonErr(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if err := s.sc.CloseAll(); err != nil {
 		jsonErr(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

@@ -23,11 +23,6 @@ header h1{font-size:15px;margin:0;font-weight:600}
 .dot.on{background:var(--grn);box-shadow:0 0 6px var(--grn)}
 .hdr-actions{display:flex;align-items:center;gap:8px;margin-left:auto}
 .page{max-width:1200px;margin:0 auto;padding:16px 20px 24px}
-.summary{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:16px}
-.card{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px 14px}
-.card label{display:block;font-size:11px;color:var(--mut);letter-spacing:.02em;margin-bottom:5px}
-.card .big{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
-.card .sub{font-size:11px;color:var(--mut);margin-top:4px}
 .up{color:var(--grn)}.down{color:var(--red)}
 .panel{background:var(--panel);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:14px}
 .panel-head{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--border)}
@@ -47,6 +42,8 @@ button.act:disabled{opacity:.45;cursor:not-allowed}
 .pill.buy{background:#2ea04322;color:#3fb950}.pill.sell{background:#f8514922;color:#ff7b72}
 .alerts-box{max-height:200px;overflow-y:auto;font-size:11px}
 .alerts-box div{padding:4px 0;border-bottom:1px dashed var(--border);color:var(--mut)}
+.alerts-box div.up{color:var(--grn)}
+.alerts-box div.down{color:var(--red)}
 #loginGate{position:fixed;inset:0;z-index:99;background:var(--bg);display:flex;align-items:center;justify-content:center}
 .login-card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:28px 24px;width:360px;text-align:center}
 .login-card input{width:100%;padding:12px;font-size:15px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--txt);margin:12px 0}
@@ -76,9 +73,7 @@ button.act:disabled{opacity:.45;cursor:not-allowed}
 .grid-step-card.placed .grid-step-badge{background:#388bfd33;color:#58a6ff}
 .grid-step-card.pending .grid-step-badge{background:rgba(110,118,129,0.1);color:var(--mut)}
 
-@media(max-width:1024px){.summary{grid-template-columns:repeat(3,1fr)}}
-@media(max-width:768px){.summary{grid-template-columns:repeat(2,1fr)}.bottom2{grid-template-columns:1fr}.card .big{font-size:16px}.page{padding:12px}header{padding:8px 12px;flex-wrap:wrap}}
-@media(max-width:480px){.summary{grid-template-columns:repeat(2,1fr)}.summary .card:last-child{grid-column:span 2}}
+@media(max-width:768px){.bottom2{grid-template-columns:1fr}.page{padding:12px}header{padding:8px 12px;flex-wrap:wrap}}
 </style>
 <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 </head>
@@ -222,7 +217,7 @@ function initChart(){
   if(chart) return;
   chart=LightweightCharts.createChart($('chartContainer'),{
     layout:{background:{type:'solid',color:'#0d1117'},textColor:'#e6edf3'},
-    grid:{vertLines:{color:'rgba(48,54,61,0.5)'},horzLines:{color:'rgba(48,54,61,0.5)'}},
+    grid:{vertLines:{visible:false},horzLines:{visible:false}},
     crosshair:{mode:0},
     rightPriceScale:{borderColor:'#30363d'},
     timeScale:{borderColor:'#30363d',timeVisible:true,secondsVisible:false}
@@ -266,9 +261,15 @@ function updatePriceLines(s){
     }
   }
   if(s.tpOrder&&s.tpOrder.price){
+    let tpProfitStr='';
+    const entry=s.position&&s.position.hasPosition?s.position.entryPrice:0;
+    if(entry>0&&s.tpOrder.quantity>0){
+      const profit=(s.tpOrder.price-entry)*s.tpOrder.quantity;
+      tpProfitStr=' '+signed(profit);
+    }
     priceLines.push(candleSeries.createPriceLine({
       price:s.tpOrder.price,color:'#2ea043',lineStyle:0,
-      title:'止盈 '+fmtP(s.tpOrder.price)+' × '+fmtQ(s.tpOrder.quantity),axisLabelVisible:true
+      title:'止盈'+tpProfitStr,axisLabelVisible:true
     }));
   }
   if(s.openOrders){
@@ -353,6 +354,17 @@ function render(s){
     const pcts = [1.0, 1.0, 1.0, 1.1, 2.1, 2.2, 4.5, 4.8, 7.7];
     const allocs = [3, 3, 5, 5, 18, 32, 56.7, 57.8, 116];
 
+    // 当有持仓时，根据基准入场价计算每层网格预估触发价
+    let gridPrices = [];
+    const basePrice = s.position && s.position.hasPosition ? (s.position.initialEntryPrice || s.position.entryPrice) : 0;
+    if (basePrice > 0) {
+      let tempPrice = basePrice;
+      for (let i = 0; i < maxLevels; i++) {
+        tempPrice = tempPrice * (1 - (pcts[i] || 0) / 100);
+        gridPrices.push(tempPrice);
+      }
+    }
+
     let html = '<div class="grid-steps">';
     for (let i = 0; i < maxLevels; i++) {
       let statusClass = 'pending';
@@ -370,11 +382,12 @@ function render(s){
       
       const dist = pcts[i] !== undefined ? pcts[i] + '%' : '—';
       const alloc = allocs[i] !== undefined ? allocs[i] + '%' : '—';
+      const triggerLabel = gridPrices[i] ? '@ $' + fmtPrice(gridPrices[i]) : '网格间距';
 
       html += '<div class="grid-step-card ' + statusClass + '">' +
         '<div class="grid-step-title">安全单 L' + (i+1) + '</div>' +
         '<div class="grid-step-val">' + dist + '</div>' +
-        '<div class="grid-step-lbl">网格间距</div>' +
+        '<div class="grid-step-lbl">' + triggerLabel + '</div>' +
         '<div class="grid-step-lbl" style="margin-top:2px;">配资: ' + alloc + '</div>' +
         '<span class="grid-step-badge">' + statusText + '</span>' +
       '</div>';
@@ -463,8 +476,14 @@ function render(s){
   const alerts=s.alerts||[];
   $('alertsCount').textContent=alerts.length+' 条';
   if(alerts.length){
+    function getAlertCls(msg){
+      const m=msg.toLowerCase();
+      if(m.includes('失败')||m.includes('error')||m.includes('failed')||m.includes('断开'))return 'down';
+      if(m.includes('成功')||m.includes('成交')||m.includes('filled')||m.includes('恢复')||m.includes('已连接'))return 'up';
+      return '';
+    }
     $('alertsBox').innerHTML=alerts.slice().reverse().map(a=>
-      '<div><b>'+a.time+'</b> '+a.message+'</div>'
+      '<div class="'+getAlertCls(a.message)+'"><b>'+a.time+'</b> '+a.message+'</div>'
     ).join('');
   }else{
     $('alertsBox').innerHTML='<div class="empty">暂无日志</div>';
