@@ -32,9 +32,9 @@ func NewBinanceClient(cfg *config.ExchangeConfig, bus *core.EventBus) *BinanceCl
 	client := binance.NewFuturesClient(cfg.ApiKey, cfg.ApiSecret)
 
 	return &BinanceClient{
-		client:         client,
-		cfg:            cfg,
-		bus:            bus,
+		client:           client,
+		cfg:              cfg,
+		bus:              bus,
 		userStreamStopCh: make(chan struct{}),
 		userStreamDoneCh: make(chan struct{}),
 	}
@@ -275,6 +275,18 @@ func (bc *BinanceClient) PlaceOrder(side futures.SideType, orderType futures.Ord
 	}
 
 	return service.Do(context.Background())
+}
+
+func (bc *BinanceClient) ModifyOrder(orderID int64, side futures.SideType, quantity, price float64) (*futures.ModifyOrderResponse, error) {
+	qtyStr := strconv.FormatFloat(quantity, 'f', -1, 64)
+	priceStr := strconv.FormatFloat(price, 'f', -1, 64)
+	return bc.client.NewModifyOrderService().
+		Symbol(bc.cfg.Symbol).
+		OrderID(orderID).
+		Side(side).
+		Quantity(qtyStr).
+		Price(priceStr).
+		Do(context.Background())
 }
 
 func (bc *BinanceClient) CancelAllOrders() error {

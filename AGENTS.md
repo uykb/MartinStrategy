@@ -202,10 +202,12 @@ Each safety order notional = `balance × safetyOrderAllocations[i]`, and quantit
 ### Take Profit (TP)
 
 - TP price: `avgPrice * 1.008` (fixed 0.80% above average entry price)
-- TP quantity: full position close
-- Updated after each safety order fill
-- Old TP is cancelled before new TP is placed
-- Uses `tpMu.TryLock()` to prevent concurrent TP updates
+- TP quantity: full position close (floor truncated via `FloorToDecimals`)
+- Updated after each safety order fill, with position change detection (`newQty == prevQty && oldTPID != 0` skips update)
+- Anti-chasing check: skips update if `tpPrice <= marketPrice` to prevent immediate limit fill
+- Prefers atomic `ModifyOrder`; reconciles exchange state on failure before fallback cancel + place
+- Uses `tpMu.TryLock()` with `tpDirty` retry loop to prevent concurrent TP race conditions
+- On TP fill, polls `GetPosition()` until 0 before resetting state to `IDLE`, controlled by generational `cycleID`
 
 ## Dynamic Notional Calculation
 
